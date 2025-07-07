@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Validation\Rule;
 use App\Models\UserInteraction;
 use App\Models\UserMatch;
+use App\Models\Notification; // ✅ TAMBAHAN: Import model Notification
 
 class ProfileController extends Controller
 {
@@ -63,9 +64,7 @@ class ProfileController extends Controller
     /**
      * Menangani penyimpanan kategori matching pengguna (dari match_setup).
      */
-
-
- public function storeMatchCategories(Request $request)
+    public function storeMatchCategories(Request $request)
     {
         $user = Auth::user();
 
@@ -172,21 +171,23 @@ class ProfileController extends Controller
     }
 
     /**
-     * Menangani penyimpanan aksi like/dislike dari halaman Finding People.
+     * ✅ UPDATED: Menangani penyimpanan aksi like/dislike dari halaman Finding People.
+     * DENGAN NOTIFICATION SYSTEM
      */
     public function storeInteraction(Request $request)
     {
         $request->validate([
-            'target_user_id' => ['required', 'integer', 'exists:users,id'], // ID user target harus ada di tabel users
-            'action_type' => ['required', Rule::in(['like', 'dislike'])], // Aksi harus 'like' atau 'dislike'
+            'target_user_id' => ['required', 'integer', 'exists:users,id'],
+            'action_type' => ['required', Rule::in(['like', 'dislike'])],
         ]);
 
         $currentUser = Auth::user();
         $targetUserId = $request->target_user_id;
         $actionType = $request->action_type;
-        $matched = false; // Flag untuk menandakan apakah terjadi match
+        $matched = false;
+        $likeNotificationCreated = false;
 
-        // Pastikan user tidak meng-swipe dirinya sendiri (meskipun sudah difilter di query)
+        // Pastikan user tidak meng-swipe dirinya sendiri
         if ($currentUser->id == $targetUserId) {
             return response()->json(['status' => 'error', 'message' => 'Tidak bisa menyukai diri sendiri.'], 400);
         }
@@ -202,7 +203,7 @@ class ProfileController extends Controller
             ]
         );
 
-        // --- LOGIKA MATCHING DIMULAI DI SINI ---
+        // --- LOGIKA MATCHING & NOTIFICATION ---
         if ($actionType === 'like') {
             // Cek apakah target user juga sudah me-like user saat ini
             $mutualLike = UserInteraction::where('user_id', $targetUserId)
@@ -211,36 +212,65 @@ class ProfileController extends Controller
                                         ->first();
 
             if ($mutualLike) {
-                // Jika ada mutual like, catat sebagai match
-                // Pastikan user1_id selalu lebih kecil dari user2_id untuk uniqueness
+                // MUTUAL LIKE = MATCH!
                 $user1 = min($currentUser->id, $targetUserId);
                 $user2 = max($currentUser->id, $targetUserId);
 
-                UserMatch::firstOrCreate([ // Menggunakan Model UserMatch yang sudah dibuat
+                $match = UserMatch::firstOrCreate([
                     'user1_id' => $user1,
                     'user2_id' => $user2,
                 ]);
 
                 $matched = true;
+
+                // ✅ Create match notifications for both users
+                Notification::createMatchNotifications($currentUser->id, $targetUserId, $match->id);
+
+            } else {
+                // SINGLE LIKE = CREATE NOTIFICATION FOR TARGET USER
+                Notification::createLikeNotification($targetUserId, $currentUser->id);
+                $likeNotificationCreated = true;
             }
         }
-        // --- LOGIKA MATCHING BERAKHIR DI SINI ---
 
-        $responseMessage = 'Interaksi disimpan.';
+        // --- RESPONSE BERDASARKAN AKSI ---
         if ($matched) {
-            $responseMessage = 'SELAMAT! TERJADI MATCH!';
-        } else if ($interaction->wasRecentlyCreated) {
-            $responseMessage = 'Interaksi baru disimpan.';
-        } else {
-            $responseMessage = 'Interaksi diperbarui.';
+            return response()->json([
+                'status' => 'success',
+                'message' => 'SELAMAT! TERJADI MATCH! 🎉',
+                'matched' => true,
+                'target_user_id' => $targetUserId,
+                'action_type' => $actionType
+            ], 200);
+        } 
+        elseif ($actionType === 'like' && $likeNotificationCreated) {
+            return response()->json([
+                'status' => 'success', 
+                'message' => 'Like terkirim! Tunggu mereka like balik untuk match 💕',
+                'matched' => false,
+                'target_user_id' => $targetUserId,
+                'action_type' => $actionType,
+                'notification_sent' => true
+            ], 200);
         }
-
-
-        return response()->json([
-            'status' => 'success',
-            'message' => $responseMessage,
-            'matched' => $matched, // Kirim status match ke frontend
-            'target_user_id' => $targetUserId // Kembalikan ID user target
-        ], 200);
+        elseif ($actionType === 'dislike') {
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Pass. Mencari yang berikutnya...',
+                'matched' => false,
+                'target_user_id' => $targetUserId,
+                'action_type' => $actionType
+            ], 200);
+        }
+        else {
+            // Fallback response
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Interaksi disimpan.',
+                'matched' => false,
+                'target_user_id' => $targetUserId,
+                'action_type' => $actionType
+            ], 200);
+        }
     }
 }

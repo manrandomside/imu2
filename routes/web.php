@@ -5,6 +5,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\CommunityController;
+use App\Http\Controllers\NotificationController; // ✅ TAMBAHAN: Import NotificationController
 
 // Rute default, bisa diarahkan ke halaman login atau register nantinya
 Route::get('/', function () {
@@ -55,6 +56,9 @@ Route::middleware(['auth'])->group(function () {
     // Rute untuk halaman personal chat
     Route::get('/chat/personal', [ChatController::class, 'showPersonalChatPage'])->name('chat.personal');
     Route::post('/chat/send-message', [ChatController::class, 'sendMessage'])->name('chat.send_message');
+    
+    // DITAMBAHKAN: API endpoint untuk real-time chat (opsional)
+    Route::get('/chat/messages', [ChatController::class, 'getMessages'])->name('chat.get_messages');
 
     // Rute untuk halaman community chat
     Route::get('/community', [CommunityController::class, 'showCommunityChatPage'])->name('community');
@@ -65,6 +69,14 @@ Route::middleware(['auth'])->group(function () {
 
     // Rute POST untuk menyimpan interaksi (like/dislike)
     Route::post('/user/interact', [ProfileController::class, 'storeInteraction'])->name('user.interact');
+
+    // ✅ NOTIFICATION ROUTES - NEW!
+    Route::get('/notifications/count', [NotificationController::class, 'getUnreadCount'])->name('notifications.count');
+    Route::get('/notifications', [NotificationController::class, 'getNotifications'])->name('notifications.api');
+    Route::post('/notifications/mark-read', [NotificationController::class, 'markAsRead'])->name('notifications.mark_read');
+    Route::post('/notifications/mark-all-read', [NotificationController::class, 'markAllAsRead'])->name('notifications.mark_all_read');
+    Route::post('/notifications/like-back', [NotificationController::class, 'likeBack'])->name('notifications.like_back');
+    Route::get('/notifications/page', [NotificationController::class, 'index'])->name('notifications.index');
 
     // Tambahkan rute untuk Update Profil (akan kita buat nanti jika ada form update di halaman user.profile)
     // Route::post('/profile/update', [ProfileController::class, 'updateProfile'])->name('profile.update');

@@ -6,83 +6,96 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use App\Models\UserMatch;
 use App\Models\User;
-use App\Models\Message; // Ditambahkan: Import model Message
+use App\Models\Message;
+use Illuminate\Support\Str;
 
 class ChatController extends Controller
 {
     /**
-     * Menampilkan halaman personal chat dengan daftar match dinamis dan pesan aktual/dummy.
+     * Menampilkan halaman personal chat dengan daftar match dinamis dan pesan aktual.
      */
     public function showPersonalChatPage(Request $request)
     {
         $currentUser = Auth::user();
 
         // Ambil daftar match untuk user yang sedang login
-        // Match bisa jadi user1_id atau user2_id
         $myMatches = UserMatch::where(function ($query) use ($currentUser) {
                                 $query->where('user1_id', $currentUser->id)
                                       ->orWhere('user2_id', $currentUser->id);
                             })
-                            ->with(['user1', 'user2']) // Eager load data user yang match
+                            ->with(['user1', 'user2'])
+                            ->orderBy('created_at', 'desc') // Urutkan berdasarkan match terbaru
                             ->get();
 
         $chatListUsers = [];
         $selectedOtherUser = null;
-        $activeMatch = null; // Tambahan: Untuk menyimpan objek match yang aktif
+        $activeMatch = null;
 
-        $activeChatUserId = $request->query('with', null); // Ambil ID user dari query string jika ada (misal: /chat/personal?with=ID_USER)
+        $activeChatUserId = $request->query('with', null);
 
-        // Membangun daftar chat dari matches
+        // Membangun daftar chat dari matches dengan last message yang sebenarnya
         foreach ($myMatches as $match) {
-            // Tentukan siapa "other user" dalam match ini
             $otherUserInMatch = ($match->user1_id === $currentUser->id) ? $match->user2 : $match->user1;
 
-            // Pastikan otherUserInMatch tidak null sebelum mengakses propertinya (bisa terjadi jika foreign key tidak valid)
             if ($otherUserInMatch) {
+                // Ambil pesan terakhir untuk match ini
+                $lastMessage = Message::where('match_id', $match->id)
+                                    ->orderBy('created_at', 'desc')
+                                    ->first();
+
+                $lastMessageText = $lastMessage 
+                    ? ($lastMessage->sender_id === $currentUser->id ? 'You: ' : '') . Str::limit($lastMessage->message_content, 30)
+                    : 'Mulai obrolan!';
+
                 $chatListUsers[] = (object)[
                     'id' => $otherUserInMatch->id,
                     'full_name' => $otherUserInMatch->full_name,
-                    // Menggunakan profile_picture dari otherUser, atau placeholder
                     'profile_picture' => $otherUserInMatch->profile_picture,
-                    'last_message' => 'Mulai obrolan!', // Placeholder, nanti dari pesan terakhir
-                    'is_active' => ($otherUserInMatch->id == $activeChatUserId), // Tandai jika ini chat yang aktif
-                    'match_id' => $match->id // Tambahkan match_id
+                    'last_message' => $lastMessageText,
+                    'last_message_time' => $lastMessage ? $lastMessage->created_at->diffForHumans() : null,
+                    'is_active' => ($otherUserInMatch->id == $activeChatUserId),
+                    'match_id' => $match->id,
+                    'has_unread' => $this->hasUnreadMessages($match->id, $currentUser->id) // Untuk indikator pesan belum dibaca
                 ];
 
-                // Jika user ini yang diminta untuk chat aktif
+                // Set active chat
                 if ($otherUserInMatch->id == $activeChatUserId) {
                     $selectedOtherUser = $otherUserInMatch;
-                    $activeMatch = $match; // Simpan objek match yang aktif
+                    $activeMatch = $match;
                 }
             }
         }
 
-        // Jika tidak ada user spesifik yang diminta via query string,
-        // atau jika user yang diminta tidak ada dalam daftar match,
-        // pilih user pertama dari daftar match sebagai chat aktif default.
+        // Jika tidak ada user spesifik yang diminta, pilih yang pertama
         if (empty($selectedOtherUser) && count($chatListUsers) > 0) {
-            // Pastikan ada chatListUsers[0] sebelum mengaksesnya
-            if (isset($chatListUsers[0])) {
-                $selectedOtherUser = User::find($chatListUsers[0]->id);
-                $chatListUsers[0]->is_active = true;
-                // Dapatkan juga activeMatch untuk user pertama jika tidak ada query 'with'
-                $activeMatch = UserMatch::where(function ($query) use ($currentUser, $selectedOtherUser) {
-                                        $query->where('user1_id', $currentUser->id)->where('user2_id', $selectedOtherUser->id);
-                                    })->orWhere(function ($query) use ($currentUser, $selectedOtherUser) {
-                                        $query->where('user1_id', $selectedOtherUser->id)->where('user2_id', $currentUser->id);
-                                    })->first();
+            $selectedOtherUser = User::find($chatListUsers[0]->id);
+            $chatListUsers[0]->is_active = true;
+            
+            // Cari active match untuk user pertama
+            foreach ($myMatches as $match) {
+                $otherUser = ($match->user1_id === $currentUser->id) ? $match->user2 : $match->user1;
+                if ($otherUser && $otherUser->id === $selectedOtherUser->id) {
+                    $activeMatch = $match;
+                    break;
+                }
             }
         }
 
-        // Ambil pesan aktual dari database jika ada selectedOtherUser dan activeMatch
-        $messages = [];
+        // Ambil pesan aktual dari database
+        $messages = collect();
         if (!empty($selectedOtherUser) && !empty($activeMatch)) {
             $messages = Message::where('match_id', $activeMatch->id)
-                                ->orderBy('created_at', 'asc') // Urutkan pesan berdasarkan waktu kirim
+                                ->with('sender') // Eager load sender info
+                                ->orderBy('created_at', 'asc')
                                 ->get();
+
+            // Mark messages as read untuk receiver
+            Message::where('match_id', $activeMatch->id)
+                   ->where('receiver_id', $currentUser->id)
+                   ->whereNull('read_at')
+                   ->update(['read_at' => now()]);
         }
 
-        // Kirim semua data ke view
         return view('chat.personal', compact('selectedOtherUser', 'messages', 'currentUser', 'chatListUsers', 'activeMatch'));
     }
 
@@ -105,10 +118,9 @@ class ChatController extends Controller
         $currentUser = Auth::user();
         $receiverId = $request->receiver_id;
         $matchId = $request->match_id;
-        $messageContent = $request->message_content;
+        $messageContent = trim($request->message_content);
 
-        // Pastikan match_id yang diberikan valid untuk user ini
-        // dan bahwa user yang sedang login adalah salah satu pihak dalam match tersebut
+        // Validasi match
         $match = UserMatch::where('id', $matchId)
                         ->where(function ($query) use ($currentUser, $receiverId) {
                             $query->where(function ($q) use ($currentUser, $receiverId) {
@@ -120,31 +132,103 @@ class ChatController extends Controller
                         ->first();
 
         if (!$match) {
-            return response()->json(['status' => 'error', 'message' => 'Match tidak valid untuk pengiriman pesan ini.'], 403);
+            return response()->json([
+                'status' => 'error', 
+                'message' => 'Match tidak valid untuk pengiriman pesan ini.'
+            ], 403);
         }
 
-        // Simpan pesan ke database
-        $message = Message::create([
-            'sender_id' => $currentUser->id,
-            'receiver_id' => $receiverId,
-            'match_id' => $matchId,
-            'message_content' => $messageContent,
-            'read_at' => null, // Pesan baru belum dibaca
+        try {
+            // Simpan pesan ke database
+            $message = Message::create([
+                'sender_id' => $currentUser->id,
+                'receiver_id' => $receiverId,
+                'match_id' => $matchId,
+                'message_content' => $messageContent,
+                'read_at' => null,
+            ]);
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Pesan berhasil dikirim.',
+                'sent_message' => [
+                    'id' => $message->id,
+                    'sender_id' => $message->sender_id,
+                    'receiver_id' => $message->receiver_id,
+                    'message_content' => $message->message_content,
+                    'timestamp' => $message->created_at->format('H:i A'),
+                    'sender_name' => $currentUser->full_name,
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            \Log::error('Error sending message: ' . $e->getMessage());
+            
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Terjadi kesalahan saat mengirim pesan.'
+            ], 500);
+        }
+    }
+
+    /**
+     * Cek apakah ada pesan yang belum dibaca untuk match tertentu
+     */
+    private function hasUnreadMessages($matchId, $currentUserId)
+    {
+        return Message::where('match_id', $matchId)
+                     ->where('receiver_id', $currentUserId)
+                     ->whereNull('read_at')
+                     ->exists();
+    }
+
+    /**
+     * API endpoint untuk mengambil pesan terbaru (untuk real-time chat jika diperlukan)
+     */
+    public function getMessages(Request $request)
+    {
+        $request->validate([
+            'match_id' => ['required', 'integer', 'exists:matches,id'],
+            'last_message_id' => ['nullable', 'integer']
         ]);
 
-        // Untuk real-time chat (opsional), biasanya akan ada broadcast event di sini.
-        // Untuk saat ini, kita akan kembalikan pesan yang disimpan agar frontend bisa menampilkannya.
+        $currentUser = Auth::user();
+        $matchId = $request->match_id;
+        $lastMessageId = $request->last_message_id;
+
+        // Verifikasi bahwa user adalah bagian dari match ini
+        $match = UserMatch::where('id', $matchId)
+                        ->where(function ($query) use ($currentUser) {
+                            $query->where('user1_id', $currentUser->id)
+                                  ->orWhere('user2_id', $currentUser->id);
+                        })
+                        ->first();
+
+        if (!$match) {
+            return response()->json(['status' => 'error', 'message' => 'Unauthorized'], 403);
+        }
+
+        $query = Message::where('match_id', $matchId)->with('sender');
+        
+        if ($lastMessageId) {
+            $query->where('id', '>', $lastMessageId);
+        }
+
+        $messages = $query->orderBy('created_at', 'asc')->get();
 
         return response()->json([
             'status' => 'success',
-            'message' => 'Pesan berhasil dikirim.',
-            'sent_message' => [ // Kembalikan data pesan yang baru dikirim
-                'id' => $message->id,
-                'sender_id' => $message->sender_id,
-                'receiver_id' => $message->receiver_id,
-                'message_content' => $message->message_content,
-                'timestamp' => $message->created_at->format('H:i A'), // Format waktu untuk tampilan
-            ]
-        ], 200);
+            'messages' => $messages->map(function($message) use ($currentUser) {
+                return [
+                    'id' => $message->id,
+                    'sender_id' => $message->sender_id,
+                    'receiver_id' => $message->receiver_id,
+                    'message_content' => $message->message_content,
+                    'timestamp' => $message->created_at->format('H:i A'),
+                    'is_sender' => $message->sender_id === $currentUser->id,
+                    'sender_name' => $message->sender->full_name,
+                ];
+            })
+        ]);
     }
 }

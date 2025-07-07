@@ -229,7 +229,7 @@
 <body class="bg-gray-100 min-h-screen flex flex-col">
     <header class="bg-blue-300 py-4 px-6 flex justify-between items-center text-white sticky top-0 z-50 w-full">
         <div class="text-2xl font-bold">I MATCH U</div>
-        <nav class="flex items-center space-x-8"> {{-- Added items-center --}}
+        <nav class="flex items-center space-x-8">
             {{-- Simulasi disabled nav links for profile setup/match setup --}}
             @php
                 $isProfileIncomplete = false;
@@ -259,21 +259,62 @@
                 <span class="text-gray-400 cursor-not-allowed">Find</span>
                 <span class="text-gray-400 cursor-not-allowed">Community</span>
                 <span class="text-gray-400 cursor-not-allowed">Profile</span>
-                <span class="text-gray-400 cursor-not-allowed ml-auto">Logout</span> {{-- Logout link, but disabled --}}
-                <div class="w-8 h-8 rounded-full bg-gray-400 ml-4"></div> {{-- Placeholder for profile icon when disabled --}}
+                <span class="text-gray-400 cursor-not-allowed ml-auto">Logout</span>
+                <div class="w-8 h-8 rounded-full bg-gray-400 ml-4"></div>
             @else
                 <a href="{{ route('home') }}" class="hover:text-gray-200">Home</a>
                 <a href="{{ route('chat.personal') }}" class="hover:text-gray-200">Chat</a>
                 <a href="{{ route('find.people') }}" class="hover:text-gray-200">Find</a>
                 <a href="{{ route('community') }}" class="hover:text-gray-200">Community</a>
                 <a href="{{ route('user.profile') }}" class="hover:text-gray-200">Profile</a>
-                <a href="{{ route('logout') }}" class="ml-auto top-nav-button bg-red-500 hover:bg-red-600">Logout</a> {{-- Logout link, positioned to the right --}}
+                
+                {{-- ✅ NOTIFICATION BELL - NEW! --}}
+                @auth
+                <div class="relative">
+                    <button id="notification-bell" class="relative p-2 hover:bg-blue-400 rounded-full transition-colors">
+                        <i class="fas fa-bell text-xl"></i>
+                        {{-- Red dot indicator --}}
+                        <span id="notification-dot" class="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-xs flex items-center justify-center text-white font-bold hidden">
+                            <span id="notification-count">0</span>
+                        </span>
+                    </button>
+                    
+                    {{-- Notification Dropdown --}}
+                    <div id="notification-dropdown" class="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-xl border border-gray-200 text-gray-800 hidden z-50">
+                        {{-- Header --}}
+                        <div class="px-4 py-3 border-b border-gray-200 flex justify-between items-center">
+                            <h3 class="font-semibold text-gray-800">Notifications</h3>
+                            <button id="mark-all-read" class="text-blue-500 text-sm hover:text-blue-700">
+                                Mark all read
+                            </button>
+                        </div>
+                        
+                        {{-- Notifications List --}}
+                        <div id="notifications-list" class="max-h-96 overflow-y-auto">
+                            {{-- Notifications will be loaded here via JavaScript --}}
+                            <div class="p-4 text-center text-gray-500">
+                                <i class="fas fa-spinner fa-spin text-lg mb-2"></i>
+                                <p>Loading notifications...</p>
+                            </div>
+                        </div>
+                        
+                        {{-- Footer --}}
+                        <div class="px-4 py-3 border-t border-gray-200 text-center">
+                            <a href="{{ route('notifications.index') }}" class="text-blue-500 text-sm hover:text-blue-700">
+                                View all notifications
+                            </a>
+                        </div>
+                    </div>
+                </div>
+                @endauth
+                
+                <a href="{{ route('logout') }}" class="ml-auto top-nav-button bg-red-500 hover:bg-red-600">Logout</a>
+                
                 {{-- Profile Icon --}}
                 <div class="w-8 h-8 rounded-full bg-gray-400 ml-4 flex items-center justify-center overflow-hidden">
-                    @auth {{-- Hanya tampilkan jika user login --}}
+                    @auth
                         <img src="{{ Auth::user()->profile_picture ?? 'https://via.placeholder.com/32/cccccc/ffffff?text=' . strtoupper(substr(Auth::user()->full_name ?? '', 0, 1)) }}" alt="Profile Icon" class="w-full h-full object-cover">
                     @else
-                        {{-- Placeholder jika tidak login --}}
                         <i class="fas fa-user text-white text-lg"></i>
                     @endauth
                 </div>
@@ -297,5 +338,230 @@
     </footer>
 
     @stack('scripts') {{-- Pastikan ini ada untuk menampung script dari halaman child --}}
+
+    {{-- ✅ NOTIFICATION JAVASCRIPT - NEW! --}}
+    @auth
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const notificationBell = document.getElementById('notification-bell');
+            const notificationDropdown = document.getElementById('notification-dropdown');
+            const notificationDot = document.getElementById('notification-dot');
+            const notificationCount = document.getElementById('notification-count');
+            const notificationsList = document.getElementById('notifications-list');
+            const markAllReadBtn = document.getElementById('mark-all-read');
+            
+            let dropdownOpen = false;
+
+            // Toggle notification dropdown
+            notificationBell.addEventListener('click', function(e) {
+                e.stopPropagation();
+                dropdownOpen = !dropdownOpen;
+                
+                if (dropdownOpen) {
+                    notificationDropdown.classList.remove('hidden');
+                    loadNotifications();
+                } else {
+                    notificationDropdown.classList.add('hidden');
+                }
+            });
+
+            // Close dropdown when clicking outside
+            document.addEventListener('click', function() {
+                if (dropdownOpen) {
+                    notificationDropdown.classList.add('hidden');
+                    dropdownOpen = false;
+                }
+            });
+
+            // Prevent dropdown from closing when clicking inside
+            notificationDropdown.addEventListener('click', function(e) {
+                e.stopPropagation();
+            });
+
+            // Mark all as read
+            markAllReadBtn.addEventListener('click', function() {
+                markAllNotificationsAsRead();
+            });
+
+            // Load notification count on page load
+            updateNotificationCount();
+            
+            // Poll for new notifications every 30 seconds
+            setInterval(updateNotificationCount, 30000);
+
+            // Functions
+            async function updateNotificationCount() {
+                try {
+                    const response = await fetch('/notifications/count', {
+                        headers: {
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
+                        }
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.status === 'success') {
+                        const count = data.unread_count;
+                        
+                        if (count > 0) {
+                            notificationDot.classList.remove('hidden');
+                            notificationCount.textContent = count > 9 ? '9+' : count;
+                        } else {
+                            notificationDot.classList.add('hidden');
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error fetching notification count:', error);
+                }
+            }
+
+            async function loadNotifications() {
+                try {
+                    const response = await fetch('/notifications', {
+                        headers: {
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
+                        }
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.status === 'success') {
+                        renderNotifications(data.notifications);
+                        updateNotificationCount(); // Update count after loading
+                    }
+                } catch (error) {
+                    console.error('Error loading notifications:', error);
+                    notificationsList.innerHTML = '<div class="p-4 text-center text-red-500">Error loading notifications</div>';
+                }
+            }
+
+            function renderNotifications(notifications) {
+                if (notifications.length === 0) {
+                    notificationsList.innerHTML = `
+                        <div class="p-6 text-center text-gray-500">
+                            <i class="fas fa-bell-slash text-2xl mb-2"></i>
+                            <p>No notifications yet</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                const notificationsHtml = notifications.map(notification => {
+                    const isUnread = !notification.is_read;
+                    const bgClass = isUnread ? 'bg-blue-50' : 'bg-white';
+                    const borderClass = isUnread ? 'border-l-4 border-blue-500' : '';
+                    
+                    let actionButton = '';
+                    if (notification.type === 'like_received' && isUnread) {
+                        actionButton = `
+                            <button onclick="likeBack(${notification.id}, ${notification.from_user.id})" 
+                                    class="mt-2 bg-pink-500 hover:bg-pink-600 text-white px-3 py-1 rounded-full text-xs transition-colors">
+                                💖 Like Back
+                            </button>
+                        `;
+                    } else if (notification.type === 'match_created') {
+                        actionButton = `
+                            <button onclick="goToChat(${notification.data.other_user.id})" 
+                                    class="mt-2 bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded-full text-xs transition-colors">
+                                💬 Start Chat
+                            </button>
+                        `;
+                    }
+
+                    return `
+                        <div class="p-4 hover:bg-gray-50 transition-colors ${bgClass} ${borderClass}" 
+                             onclick="markAsRead(${notification.id})">
+                            <div class="flex items-start space-x-3">
+                                <div class="w-10 h-10 rounded-full overflow-hidden flex-shrink-0">
+                                    <img src="${notification.from_user?.profile_picture || 'https://via.placeholder.com/40/cccccc/ffffff?text=' + (notification.from_user?.name?.charAt(0) || 'U')}" 
+                                         alt="Profile" class="w-full h-full object-cover">
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="font-semibold text-sm text-gray-800">${notification.title}</p>
+                                    <p class="text-sm text-gray-600 mt-1">${notification.message}</p>
+                                    <p class="text-xs text-gray-400 mt-1">${notification.created_at}</p>
+                                    ${actionButton}
+                                </div>
+                                ${isUnread ? '<div class="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0"></div>' : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                notificationsList.innerHTML = notificationsHtml;
+            }
+
+            // Global functions for button actions
+            window.markAsRead = async function(notificationId) {
+                try {
+                    await fetch('/notifications/mark-read', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
+                        },
+                        body: JSON.stringify({ notification_id: notificationId })
+                    });
+                    
+                    updateNotificationCount();
+                } catch (error) {
+                    console.error('Error marking notification as read:', error);
+                }
+            };
+
+            window.likeBack = async function(notificationId, fromUserId) {
+                try {
+                    const response = await fetch('/notifications/like-back', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
+                        },
+                        body: JSON.stringify({ 
+                            notification_id: notificationId,
+                            from_user_id: fromUserId 
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.status === 'success') {
+                        if (data.matched) {
+                            // Show match notification
+                            alert('🎉 IT\'S A MATCH! Check your chat!');
+                        } else {
+                            alert('💕 Like sent back!');
+                        }
+                        
+                        loadNotifications(); // Reload notifications
+                        updateNotificationCount();
+                    }
+                } catch (error) {
+                    console.error('Error liking back:', error);
+                }
+            };
+
+            window.goToChat = function(userId) {
+                window.location.href = `/chat/personal?with=${userId}`;
+            };
+
+            async function markAllNotificationsAsRead() {
+                try {
+                    await fetch('/notifications/mark-all-read', {
+                        method: 'POST',
+                        headers: {
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
+                        }
+                    });
+                    
+                    loadNotifications();
+                    updateNotificationCount();
+                } catch (error) {
+                    console.error('Error marking all notifications as read:', error);
+                }
+            }
+        });
+    </script>
+    @endauth
 </body>
 </html>
