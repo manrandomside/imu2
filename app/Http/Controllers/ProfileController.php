@@ -63,31 +63,111 @@ class ProfileController extends Controller
     /**
      * Menangani penyimpanan kategori matching pengguna (dari match_setup).
      */
-    public function storeMatchCategories(Request $request)
+
+
+ public function storeMatchCategories(Request $request)
     {
         $user = Auth::user();
 
+        // Debugging: log input yang diterima
+        \Log::info('storeMatchCategories called', [
+            'user_id' => $user->id,
+            'input_match_categories' => $request->input('match_categories'),
+            'all_input' => $request->all()
+        ]);
+
         // Validasi kategori match
         $request->validate([
-            'match_categories' => ['required', 'json', 'min:1'], // Harus ada, format JSON, minimal 1 pilihan
+            'match_categories' => ['required', 'string', 'min:1'], // Ubah dari 'json' ke 'string' untuk debugging yang lebih baik
         ], [
             'match_categories.required' => 'Pilih setidaknya satu kategori yang Anda cari.',
-            'match_categories.json' => 'Format kategori tidak valid.',
+            'match_categories.string' => 'Format kategori tidak valid.',
             'match_categories.min' => 'Pilih setidaknya satu kategori yang Anda cari.',
         ]);
 
-        $matchCategoriesArray = json_decode($request->match_categories, true);
+        $matchCategoriesInput = $request->input('match_categories');
+        
+        // Validasi dan decode JSON
+        $matchCategoriesArray = json_decode($matchCategoriesInput, true);
+        
+        // Cek apakah JSON decode berhasil
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            \Log::error('JSON decode error in storeMatchCategories', [
+                'input' => $matchCategoriesInput,
+                'json_error' => json_last_error_msg()
+            ]);
+            
+            return back()->withErrors([
+                'match_categories' => 'Format kategori tidak valid. Silakan coba lagi.'
+            ])->withInput();
+        }
 
         // Validasi tambahan: Pastikan array match_categories tidak kosong setelah decode
         if (!is_array($matchCategoriesArray) || count($matchCategoriesArray) === 0) {
-            return back()->withErrors(['match_categories' => 'Pilih setidaknya satu kategori yang Anda cari.'])->withInput();
+            \Log::warning('Empty or invalid match categories array', [
+                'decoded_array' => $matchCategoriesArray,
+                'is_array' => is_array($matchCategoriesArray)
+            ]);
+            
+            return back()->withErrors([
+                'match_categories' => 'Pilih setidaknya satu kategori yang Anda cari.'
+            ])->withInput();
         }
 
-        $user->match_categories = $matchCategoriesArray; // Menyimpan match_categories
-        $user->save();
+        // Validasi kategori yang diizinkan (optional security check)
+        $allowedCategories = ['friends', 'jobs', 'committee', 'pkm', 'kkn', 'contest'];
+        $invalidCategories = array_diff($matchCategoriesArray, $allowedCategories);
+        
+        if (!empty($invalidCategories)) {
+            \Log::warning('Invalid categories submitted', [
+                'invalid_categories' => $invalidCategories,
+                'submitted_categories' => $matchCategoriesArray
+            ]);
+            
+            return back()->withErrors([
+                'match_categories' => 'Kategori yang dipilih tidak valid: ' . implode(', ', $invalidCategories)
+            ])->withInput();
+        }
+
+        // Debug: log sebelum save
+        \Log::info('About to save match categories', [
+            'user_id' => $user->id,
+            'old_match_categories' => $user->match_categories,
+            'new_match_categories' => $matchCategoriesArray
+        ]);
+
+        try {
+            // Simpan match_categories
+            $user->match_categories = $matchCategoriesArray;
+            $saved = $user->save();
+            
+            // Debug: log setelah save
+            \Log::info('Match categories saved', [
+                'user_id' => $user->id,
+                'save_result' => $saved,
+                'saved_match_categories' => $user->fresh()->match_categories,
+                'raw_check' => $user->fresh()->getRawMatchCategories()
+            ]);
+            
+            if (!$saved) {
+                throw new \Exception('Failed to save user data');
+            }
+            
+        } catch (\Exception $e) {
+            \Log::error('Error saving match categories', [
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return back()->withErrors([
+                'match_categories' => 'Terjadi kesalahan saat menyimpan data. Silakan coba lagi.'
+            ])->withInput();
+        }
 
         // Setelah kategori match disimpan, arahkan ke halaman home atau intended URL
         $intendedUrl = session()->pull('url.intended', route('home'));
+        
         return redirect($intendedUrl)->with('success', 'Kategori pencarian Anda berhasil disimpan! Anda siap menjelajah IMU.');
     }
 

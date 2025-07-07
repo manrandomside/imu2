@@ -242,61 +242,90 @@ class AuthController extends Controller
     }
 
     /**
-     * Menampilkan halaman finding people.
+     * Menampilkan halaman finding people - FIXED VERSION (DESCRIPTION FILTER REMOVED).
      */
     public function showFindingPeoplePage()
     {
         $currentUserId = Auth::id();
         $currentUser = Auth::user();
 
-        // --- DEBUGGING START ---
+        // Debugging: uncomment untuk debug
         // dd([
         //     'currentUser' => $currentUser ? $currentUser->toArray() : null,
-        //     'currentUserInterests' => $currentUser->interests,
         //     'currentUserMatchCategories' => $currentUser->match_categories,
-        //     'interactedUserIds' => UserInteraction::where('user_id', $currentUserId)->pluck('target_user_id')->toArray(),
-        //     'currentAuthId' => $currentUserId,
+        //     'is_array' => is_array($currentUser->match_categories),
         // ]);
-        // --- DEBUGGING END ---
 
         $interactedUserIds = UserInteraction::where('user_id', $currentUserId)
                                             ->pluck('target_user_id')
                                             ->toArray();
 
-        $currentUserInterests = $currentUser->interests; 
         $currentUserMatchCategories = $currentUser->match_categories; 
 
+        // Base query untuk users yang akan ditampilkan
         $usersToDisplayQuery = User::where('id', '!=', $currentUserId)
                                 ->where('is_verified', true)
                                 ->whereNotNull('prodi')
                                 ->whereNotNull('fakultas')
                                 ->whereNotNull('gender')
-                                ->whereNotNull('description')
+                                // FILTER DESCRIPTION DIHAPUS DI SINI!
+                                // ->whereNotNull('description')
                                 ->whereNotNull('interests')
                                 ->whereNotNull('match_categories')
                                 ->whereNotIn('id', $interactedUserIds);
 
-        // --- FILTER KUNCI BERDASARKAN KATEGORI MATCH (PENTING! INI FILTER UTAMA) ---
+        // FILTER BERDASARKAN KATEGORI MATCH - METODE YANG LEBIH ROBUST
         if (is_array($currentUserMatchCategories) && count($currentUserMatchCategories) > 0) {
-            $usersToDisplayQuery->where(function ($query) use ($currentUserMatchCategories) {
-                foreach ($currentUserMatchCategories as $category) {
-                    // Solusi yang lebih handal untuk JSON di SQLite/MySQL
-                    // Mencari apakah string JSON mengandung kategori yang dicari
-                    // Menggunakan JSON_EXTRACT untuk mengambil seluruh array JSON sebagai string
-                    // dan kemudian LIKE untuk mencari kecocokan substring.
-                    // Ini mengatasi masalah format JSON yang tidak konsisten atau case sensitivity.
-                    $query->orWhereRaw('LOWER(JSON_EXTRACT(match_categories, "$")) LIKE ?', ['%"' . strtolower($category) . '"%']);
-                }
-            });
+            
+            // Method 1: Coba gunakan whereJsonContains jika database mendukung (MySQL 5.7+, PostgreSQL)
+            if ($this->supportsJsonContains()) {
+                $usersToDisplayQuery->where(function ($query) use ($currentUserMatchCategories) {
+                    foreach ($currentUserMatchCategories as $category) {
+                        $query->orWhereJsonContains('match_categories', $category);
+                    }
+                });
+            } else {
+                // Method 2: Fallback untuk SQLite atau database lain
+                // Ambil semua kandidat user dan filter menggunakan PHP
+                $candidateUsers = $usersToDisplayQuery->get();
+                
+                $matchedUsers = $candidateUsers->filter(function ($user) use ($currentUserMatchCategories) {
+                    if (!is_array($user->match_categories)) {
+                        return false;
+                    }
+                    // Cek apakah ada intersection antara kategori user saat ini dengan kandidat user
+                    return !empty(array_intersect($currentUserMatchCategories, $user->match_categories));
+                });
+                
+                // Convert kembali ke Collection dan ambil 5 random
+                $usersToDisplay = $matchedUsers->shuffle()->take(5);
+                
+                return view('finding_people', compact('usersToDisplay'));
+            }
         } else {
-            // Jika user yang login tidak punya kategori match (harusnya dicegah onboarding),
-            // maka tidak ada user lain yang akan cocok dengan kriteria kategori ini.
-            $usersToDisplayQuery->whereRaw('1 = 0'); // Jika kategori kosong, jangan tampilkan siapa pun
+            // Jika user yang login tidak punya kategori match, tampilkan pesan atau redirect
+            $usersToDisplay = collect(); // Empty collection
+            return view('finding_people', compact('usersToDisplay'));
         }
 
         $usersToDisplay = $usersToDisplayQuery->inRandomOrder()->limit(5)->get();
 
         return view('finding_people', compact('usersToDisplay'));
+    }
+
+    /**
+     * Cek apakah database mendukung JSON contains operation
+     */
+    private function supportsJsonContains(): bool
+    {
+        try {
+            // Test simple whereJsonContains query
+            User::whereJsonContains('match_categories', 'test')->limit(1)->get();
+            return true;
+        } catch (\Exception $e) {
+            \Log::info('Database does not support whereJsonContains, using fallback method');
+            return false;
+        }
     }
 
     /**

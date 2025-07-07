@@ -69,3 +69,203 @@ Route::middleware(['auth'])->group(function () {
     // Tambahkan rute untuk Update Profil (akan kita buat nanti jika ada form update di halaman user.profile)
     // Route::post('/profile/update', [ProfileController::class, 'updateProfile'])->name('profile.update');
 });
+
+// Debug routes (hanya untuk development)
+Route::middleware(['auth'])->group(function () {
+    Route::get('/debug/match-categories', [DebugController::class, 'debugMatchCategories'])->name('debug.match_categories');
+    Route::get('/debug/query-filtering', [DebugController::class, 'debugQueryFiltering'])->name('debug.query_filtering');
+    
+    // Test route untuk cek data user tertentu
+    Route::get('/debug/user/{id}', function ($id) {
+        $user = \App\Models\User::find($id);
+        if (!$user) {
+            return response()->json(['error' => 'User not found'], 404);
+        }
+        
+        return response()->json([
+            'user_id' => $user->id,
+            'full_name' => $user->full_name,
+            'raw_debug' => $user->getRawMatchCategories(),
+            'match_categories' => $user->match_categories,
+            'has_friends' => $user->hasMatchCategory('friends'),
+            'has_jobs' => $user->hasMatchCategory('jobs'),
+        ], 200, [], JSON_PRETTY_PRINT);
+    })->name('debug.user');
+    
+    // Test route untuk update match categories
+    Route::post('/debug/update-match-categories', function (\Illuminate\Http\Request $request) {
+        $user = \Illuminate\Support\Facades\Auth::user();
+        
+        $categories = $request->input('categories', ['friends', 'jobs']); // default test data
+        $user->match_categories = $categories;
+        $user->save();
+        
+        return response()->json([
+            'message' => 'Updated successfully',
+            'before' => $user->getOriginal('match_categories'),
+            'after' => $user->fresh()->match_categories,
+            'raw_check' => $user->fresh()->getRawMatchCategories()
+        ], 200, [], JSON_PRETTY_PRINT);
+    })->name('debug.update_match_categories');
+});
+
+// Test seeding route (hanya untuk development)
+Route::get('/debug/seed-test-data', function () {
+    if (!\Illuminate\Support\Facades\App::environment('local')) {
+        abort(403, 'Only available in local environment');
+    }
+    
+    // Create test users with match categories
+    $testUsers = [
+        [
+            'full_name' => 'Test User 1',
+            'username' => 'testuser1',
+            'email' => 'test1@student.unud.ac.id',
+            'password' => \Illuminate\Support\Facades\Hash::make('password'),
+            'role' => 'mahasiswa',
+            'is_verified' => true,
+            'prodi' => 'Teknik Informatika',
+            'fakultas' => 'Teknik',
+            'gender' => 'Laki-laki',
+            'description' => 'Test user 1 description',
+            'interests' => ['programming', 'gaming'],
+            'match_categories' => ['friends', 'jobs']
+        ],
+        [
+            'full_name' => 'Test User 2',
+            'username' => 'testuser2',
+            'email' => 'test2@student.unud.ac.id',
+            'password' => \Illuminate\Support\Facades\Hash::make('password'),
+            'role' => 'mahasiswa',
+            'is_verified' => true,
+            'prodi' => 'Sistem Informasi',
+            'fakultas' => 'Teknik',
+            'gender' => 'Perempuan',
+            'description' => 'Test user 2 description',
+            'interests' => ['design', 'music'],
+            'match_categories' => ['friends', 'pkm', 'contest']
+        ]
+    ];
+    
+    foreach ($testUsers as $userData) {
+        \App\Models\User::updateOrCreate(
+            ['email' => $userData['email']],
+            $userData
+        );
+    }
+    
+    return response()->json(['message' => 'Test data seeded successfully'], 200);
+});
+
+Route::get('/debug-match-categories', function () {
+    if (!app()->environment('local')) {
+        abort(403, 'Only available in local environment');
+    }
+    
+    $output = [];
+    
+    // 1. Cek current user (jika login)
+    if (Auth::check()) {
+        $currentUser = Auth::user();
+        $output['current_user'] = [
+            'id' => $currentUser->id,
+            'name' => $currentUser->full_name,
+            'raw_match_categories' => DB::table('users')->where('id', $currentUser->id)->value('match_categories'),
+            'model_match_categories' => $currentUser->match_categories,
+            'is_array' => is_array($currentUser->match_categories),
+            'count' => is_array($currentUser->match_categories) ? count($currentUser->match_categories) : 0
+        ];
+    } else {
+        $output['current_user'] = 'Not logged in';
+    }
+    
+    // 2. Cek semua users dengan match_categories
+    $usersWithCategories = App\Models\User::whereNotNull('match_categories')->get();
+    $output['all_users_with_categories'] = [];
+    
+    foreach ($usersWithCategories as $user) {
+        $output['all_users_with_categories'][] = [
+            'id' => $user->id,
+            'name' => $user->full_name,
+            'raw' => DB::table('users')->where('id', $user->id)->value('match_categories'),
+            'model' => $user->match_categories,
+            'is_array' => is_array($user->match_categories)
+        ];
+    }
+    
+    // 3. Test database connection dan structure
+    $output['database_info'] = [
+        'connection' => config('database.default'),
+        'match_categories_column_exists' => Schema::hasColumn('users', 'match_categories'),
+        'total_users' => App\Models\User::count(),
+        'users_with_categories_count' => $usersWithCategories->count()
+    ];
+    
+    // 4. Test JSON operations
+    $testUser = $usersWithCategories->first();
+    if ($testUser) {
+        $output['json_test'] = [
+            'original' => $testUser->match_categories,
+            'json_encode' => json_encode($testUser->match_categories),
+            'json_decode_test' => json_decode(json_encode($testUser->match_categories), true),
+            'type_check' => gettype($testUser->match_categories)
+        ];
+    }
+    
+    return response()->json($output, 200, [], JSON_PRETTY_PRINT);
+});
+
+// Route untuk update test data
+Route::get('/debug-create-test-user', function () {
+    if (!app()->environment('local')) {
+        abort(403, 'Only available in local environment');
+    }
+    
+    try {
+        // Cek apakah user test sudah ada
+        $testUser = App\Models\User::where('email', 'test@student.unud.ac.id')->first();
+        
+        if (!$testUser) {
+            // Buat user baru
+            $testUser = App\Models\User::create([
+                'full_name' => 'Test User Debug',
+                'username' => 'testdebug',
+                'email' => 'test@student.unud.ac.id',
+                'password' => Hash::make('password'),
+                'role' => 'mahasiswa',
+                'is_verified' => true,
+                'prodi' => 'Teknik Informatika',
+                'fakultas' => 'Teknik',
+                'gender' => 'Laki-laki',
+                'description' => 'Test user untuk debugging',
+                'interests' => ['programming', 'gaming'],
+                'match_categories' => ['friends', 'jobs']
+            ]);
+            $action = 'created';
+        } else {
+            // Update user yang sudah ada
+            $testUser->match_categories = ['friends', 'jobs', 'pkm'];
+            $testUser->save();
+            $action = 'updated';
+        }
+        
+        return response()->json([
+            'status' => 'success',
+            'action' => $action,
+            'user' => [
+                'id' => $testUser->id,
+                'name' => $testUser->full_name,
+                'match_categories' => $testUser->match_categories,
+                'raw_from_db' => DB::table('users')->where('id', $testUser->id)->value('match_categories')
+            ]
+        ], 200, [], JSON_PRETTY_PRINT);
+        
+    } catch (\Exception $e) {
+        return response()->json([
+            'status' => 'error',
+            'message' => $e->getMessage(),
+            'line' => $e->getLine(),
+            'file' => $e->getFile()
+        ], 500, [], JSON_PRETTY_PRINT);
+    }
+});
