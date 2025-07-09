@@ -60,9 +60,13 @@ Route::middleware(['auth'])->group(function () {
     // DITAMBAHKAN: API endpoint untuk real-time chat (opsional)
     Route::get('/chat/messages', [ChatController::class, 'getMessages'])->name('chat.get_messages');
 
-    // Rute untuk halaman community chat
+    // ✅ UPDATED: Rute untuk halaman community chat + API endpoints baru
     Route::get('/community', [CommunityController::class, 'showCommunityChatPage'])->name('community');
     Route::post('/community/send-message', [CommunityController::class, 'sendGroupMessage'])->name('community.send_message');
+    
+    // ✅ NEW: API endpoints untuk real-time community features
+    Route::get('/community/messages', [CommunityController::class, 'getMessages'])->name('community.get_messages');
+    Route::get('/community/stats', [CommunityController::class, 'getStats'])->name('community.stats');
 
     // Rute untuk halaman profil pengguna (view-only)
     Route::get('/profile', [AuthController::class, 'showUserProfilePage'])->name('user.profile');

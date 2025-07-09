@@ -15,9 +15,18 @@ class DatabaseSeeder extends Seeder
     {
         // User::factory(10)->create();
 
-        User::factory()->create([
-            'name' => 'Test User',
-            'email' => 'test@example.com',
+        // ❌ COMMENTED OUT: Ini menggunakan factory yang tidak sesuai dengan struktur User model Anda
+        // User::factory()->create([
+        //     'name' => 'Test User',
+        //     'email' => 'test@example.com',
+        // ]);
+
+        // ✅ TAMBAHAN: Call ChatGroupSeeder
+        $this->call([
+            ChatGroupSeeder::class,
         ]);
+
+        // ℹ️ INFO: ChatGroupSeeder akan otomatis membuat admin user jika belum ada
+        // Jadi tidak perlu factory di sini
     }
 }
