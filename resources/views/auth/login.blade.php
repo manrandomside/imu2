@@ -3,7 +3,7 @@
 @section('content')
 {{-- REVISI KELAS PADA MAIN-CARD UNTUK POSITIONING --}}
 {{-- Hapus flex items-center dari main-card agar positioning absolut tidak terganggu --}}
-<div class="main-card w-full max-w-xl p-10 flex flex-col lg:absolute lg:top-1/2 lg:-translate-y-1/2 lg:right-10">
+<div class="main-card w-full max-w-xl p-10 flex flex-col lg:absolute lg:top-1/2 lg:left-1/2 lg:-translate-x-1/2 lg:-translate-y-1/2">
     {{-- START Flash Message Section --}}
     @if (session('success'))
         <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded relative mb-4 w-full" role="alert">

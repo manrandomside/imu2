@@ -102,8 +102,7 @@ class CommunityController extends Controller
     }
 
     /**
-     * Menangani pengiriman pesan baru di grup chat.
-     * ✅ ENHANCED: File upload support dan improved validation
+     * ✅ STEP 3: FIXED - Menangani pengiriman pesan baru di grup chat dengan file upload
      */
     public function sendGroupMessage(Request $request)
     {
@@ -111,21 +110,21 @@ class CommunityController extends Controller
             // ✅ ENHANCED: Validation dengan file upload support
             $validatedData = $request->validate([
                 'group_id' => ['required', 'integer', 'exists:chat_groups,id'],
-                'message_content' => ['required_without:attachment', 'nullable', 'string', 'min:1', 'max:5000'], // ✅ NEW: Optional if has attachment
-                'attachment' => ['nullable', 'file', 'max:10240'], // ✅ NEW: File upload support (10MB max)
+                'message_content' => ['required_without:attachment', 'nullable', 'string', 'min:1', 'max:5000'],
+                'attachment' => ['nullable', 'file', 'max:10240'], // 10MB max
             ], [
                 'group_id.required' => 'Grup komunitas tidak valid.',
                 'group_id.exists' => 'Grup komunitas tidak ditemukan.',
-                'message_content.required_without' => 'Pesan atau file attachment wajib diisi.', // ✅ NEW: Updated message
+                'message_content.required_without' => 'Pesan atau file attachment wajib diisi.',
                 'message_content.min' => 'Pesan terlalu pendek.',
                 'message_content.max' => 'Pesan terlalu panjang (maksimal 5000 karakter).',
-                'attachment.file' => 'File attachment tidak valid.', // ✅ NEW
-                'attachment.max' => 'Ukuran file maksimal 10 MB.', // ✅ NEW
+                'attachment.file' => 'File attachment tidak valid.',
+                'attachment.max' => 'Ukuran file maksimal 10 MB.',
             ]);
 
             $currentUser = Auth::user();
             $groupId = $validatedData['group_id'];
-            $messageContent = trim($validatedData['message_content'] ?? ''); // ✅ NEW: Handle optional content
+            $messageContent = trim($validatedData['message_content'] ?? '');
 
             // ✅ IMPROVED: Enhanced group verification
             $group = ChatGroup::where('id', $groupId)
@@ -154,7 +153,7 @@ class CommunityController extends Controller
                     'user_role' => $currentUser->role,
                     'group_id' => $groupId,
                     'group_creator_id' => $group->creator_id,
-                    'group_moderator_id' => $group->moderator_id ?? null, // ✅ NEW: Log moderator info
+                    'group_moderator_id' => $group->moderator_id ?? null,
                     'ip' => $request->ip()
                 ]);
 
@@ -164,8 +163,11 @@ class CommunityController extends Controller
                 ], 403);
             }
 
-            // ✅ NEW: Handle file upload
-            $attachmentData = $this->handleFileUpload($request->file('attachment'));
+            // ✅ FIXED: Handle file upload
+            $attachmentData = null;
+            if ($request->hasFile('attachment')) {
+                $attachmentData = $this->handleFileUpload($request->file('attachment'));
+            }
 
             // ✅ NEW: Content filtering untuk keamanan
             $filteredContent = $this->filterContent($messageContent);
@@ -175,22 +177,22 @@ class CommunityController extends Controller
                 'group_id' => $groupId,
                 'sender_id' => $currentUser->id,
                 'message_content' => $filteredContent,
-                'attachment_path' => $attachmentData['path'] ?? null, // ✅ NEW
-                'attachment_type' => $attachmentData['type'] ?? null, // ✅ NEW
-                'attachment_name' => $attachmentData['name'] ?? null, // ✅ NEW
-                'attachment_size' => $attachmentData['size'] ?? null, // ✅ NEW
+                'attachment_path' => $attachmentData['path'] ?? null,
+                'attachment_type' => $attachmentData['type'] ?? null,
+                'attachment_name' => $attachmentData['name'] ?? null,
+                'attachment_size' => $attachmentData['size'] ?? null,
             ]);
 
             // ✅ NEW: Load sender relationship untuk response
             $message->load('sender:id,full_name,role,profile_picture');
 
-            // ✅ ENHANCED: Log successful message creation dengan attachment info
+            // ✅ ENHANCED: Log successful message creation
             Log::info('Community message posted successfully', [
                 'message_id' => $message->id,
                 'user_id' => $currentUser->id,
                 'group_id' => $groupId,
                 'content_length' => strlen($filteredContent),
-                'has_attachment' => !empty($attachmentData['path']) // ✅ NEW
+                'has_attachment' => !empty($attachmentData)
             ]);
 
             // ✅ ENHANCED: Response dengan attachment data
@@ -203,24 +205,23 @@ class CommunityController extends Controller
                     'sender_id' => $message->sender_id,
                     'message_content' => $message->message_content,
                     'created_at' => $message->created_at->format('H:i A, d M Y'),
-                    'has_attachment' => $message->hasAttachment(), // ✅ NEW
-                    'attachment_url' => $message->attachment_url, // ✅ NEW
-                    'attachment_name' => $message->attachment_name, // ✅ NEW
-                    'attachment_type' => $message->attachment_type, // ✅ NEW
-                    'formatted_file_size' => $message->formatted_file_size, // ✅ NEW
+                    'has_attachment' => !empty($attachmentData),
+                    'attachment_url' => $attachmentData['url'] ?? null,
+                    'attachment_name' => $attachmentData['name'] ?? null,
+                    'attachment_type' => $attachmentData['type'] ?? null,
+                    'formatted_file_size' => $message->formatted_file_size,
                     'sender' => [
                         'id' => $message->sender->id,
                         'full_name' => $message->sender->full_name,
                         'role' => $message->sender->role,
                         'profile_picture' => $message->sender->profile_picture,
                     ],
-                    'reactions' => [], // ✅ NEW: Empty array for new message
-                    'comments' => [], // ✅ NEW: Empty array for new message
+                    'reactions' => [],
+                    'comments' => [],
                 ]
             ], 200);
 
         } catch (ValidationException $e) {
-            // ✅ NEW: Handle validation errors specifically
             Log::info('Community message validation failed', [
                 'user_id' => Auth::id(),
                 'errors' => $e->errors(),
@@ -234,7 +235,6 @@ class CommunityController extends Controller
             ], 422);
 
         } catch (\Exception $e) {
-            // ✅ NEW: Handle unexpected errors
             Log::error('Error posting community message', [
                 'error' => $e->getMessage(),
                 'line' => $e->getLine(),
@@ -246,7 +246,7 @@ class CommunityController extends Controller
 
             return response()->json([
                 'status' => 'error',
-                'message' => 'Terjadi kesalahan server. Silakan coba lagi dalam beberapa saat.'
+                'message' => 'Terjadi kesalahan server: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -460,22 +460,94 @@ class CommunityController extends Controller
     }
 
     /**
-     * ✅ ENHANCED: Check if user has permission to post in the group dengan moderator support
+     * ✅ STEP 7: FIXED - Enhanced permission system dengan detailed logging
      */
     private function checkPostPermission($user, $group)
     {
+        // ✅ ENHANCED: More detailed permission logging
+        Log::info('Checking post permission', [
+            'user_id' => $user->id,
+            'user_role' => $user->role,
+            'group_id' => $group->id,
+            'group_name' => $group->name,
+            'group_creator_id' => $group->creator_id,
+            'group_moderator_id' => $group->moderator_id,
+            'group_is_approved' => $group->is_approved
+        ]);
+
+        // ✅ ENHANCED: Check if group is approved first
+        if (!$group->is_approved) {
+            Log::warning('User attempted to post to unapproved group', [
+                'user_id' => $user->id,
+                'group_id' => $group->id
+            ]);
+            return false;
+        }
+
         // Admin global dapat posting di semua grup
         if ($user->role === 'admin') {
+            Log::info('Permission granted: User is admin', ['user_id' => $user->id]);
             return true;
         }
 
         // Pembuat grup dapat posting
         if ($group->creator_id === $user->id) {
+            Log::info('Permission granted: User is group creator', [
+                'user_id' => $user->id,
+                'group_id' => $group->id
+            ]);
             return true;
         }
 
-        // ✅ NEW: Moderator grup dapat posting
-        if ($group->moderator_id === $user->id) {
+        // ✅ ENHANCED: Moderator grup dapat posting (with null check)
+        if (!is_null($group->moderator_id) && $group->moderator_id === $user->id) {
+            Log::info('Permission granted: User is group moderator', [
+                'user_id' => $user->id,
+                'group_id' => $group->id,
+                'moderator_id' => $group->moderator_id
+            ]);
+            return true;
+        }
+
+        // ✅ ENHANCED: Enhanced permission logic for specific roles
+        if ($user->role === 'tenaga_pendidik') {
+            // Optional: Allow tenaga_pendidik to post in certain groups
+            Log::info('Checking tenaga_pendidik permission', [
+                'user_id' => $user->id,
+                'group_id' => $group->id
+            ]);
+            // For now, deny unless they are creator/moderator/admin
+        }
+
+        // ✅ LOGGING: Log denied permission attempt
+        Log::warning('Permission denied: User does not have posting rights', [
+            'user_id' => $user->id,
+            'user_role' => $user->role,
+            'group_id' => $group->id,
+            'group_creator_id' => $group->creator_id,
+            'group_moderator_id' => $group->moderator_id
+        ]);
+
+        return false;
+    }
+
+    /**
+     * ✅ STEP 7: NEW - Check if user can moderate the group
+     */
+    private function checkModeratePermission($user, $group)
+    {
+        // Admin global dapat moderate di semua grup
+        if ($user->role === 'admin') {
+            return true;
+        }
+
+        // Pembuat grup dapat moderate
+        if ($group->creator_id === $user->id) {
+            return true;
+        }
+
+        // Moderator grup dapat moderate
+        if (!is_null($group->moderator_id) && $group->moderator_id === $user->id) {
             return true;
         }
 
@@ -483,7 +555,101 @@ class CommunityController extends Controller
     }
 
     /**
-     * ✅ NEW: Handle file upload dengan security checks
+     * ✅ STEP 7: NEW - Check if user can read the group
+     */
+    private function checkReadPermission($user, $group)
+    {
+        // All authenticated users can read approved groups
+        return $group->is_approved;
+    }
+
+    /**
+     * ✅ STEP 7: NEW - Get comprehensive permissions for user in group
+     */
+    private function getUserPermissions($user, $group)
+    {
+        return [
+            'can_read' => $this->checkReadPermission($user, $group),
+            'can_post' => $this->checkPostPermission($user, $group),
+            'can_moderate' => $this->checkModeratePermission($user, $group),
+            'can_edit_messages' => $this->checkModeratePermission($user, $group),
+            'can_delete_messages' => $this->checkModeratePermission($user, $group),
+            'user_role_in_group' => $this->getUserRoleInGroup($user, $group),
+        ];
+    }
+
+    /**
+     * ✅ STEP 7: NEW - Get user role dalam group
+     */
+    private function getUserRoleInGroup($user, $group)
+    {
+        if ($user->role === 'admin') {
+            return 'admin';
+        }
+        
+        if ($group->creator_id === $user->id) {
+            return 'creator';
+        }
+        
+        if (!is_null($group->moderator_id) && $group->moderator_id === $user->id) {
+            return 'moderator';
+        }
+        
+        return 'member';
+    }
+
+    /**
+     * ✅ STEP 7: NEW - Enhanced API endpoint to get user permissions for frontend
+     */
+    public function getUserGroupPermissions(Request $request)
+    {
+        try {
+            $request->validate([
+                'group_id' => ['required', 'integer', 'exists:chat_groups,id']
+            ]);
+
+            $currentUser = Auth::user();
+            $groupId = $request->group_id;
+
+            $group = ChatGroup::find($groupId);
+            
+            if (!$group) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Group not found'
+                ], 404);
+            }
+
+            $permissions = $this->getUserPermissions($currentUser, $group);
+
+            return response()->json([
+                'status' => 'success',
+                'permissions' => $permissions,
+                'group_info' => [
+                    'id' => $group->id,
+                    'name' => $group->name,
+                    'is_approved' => $group->is_approved,
+                    'creator_id' => $group->creator_id,
+                    'moderator_id' => $group->moderator_id
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Error getting user group permissions', [
+                'error' => $e->getMessage(),
+                'user_id' => Auth::id(),
+                'request_data' => $request->only(['group_id'])
+            ]);
+
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Error getting permissions'
+            ], 500);
+        }
+    }
+
+    /**
+     * ✅ STEP 2: FIXED - Handle file upload dengan security checks dan proper path
      */
     private function handleFileUpload($file)
     {
@@ -506,16 +672,23 @@ class CommunityController extends Controller
                 throw new \Exception('File type not allowed');
             }
 
+            // ✅ FIX: Validate file size (10MB = 10485760 bytes)
+            if ($file->getSize() > 10485760) {
+                throw new \Exception('File size too large. Maximum 10MB allowed.');
+            }
+
             // Generate unique filename
             $originalName = $file->getClientOriginalName();
             $extension = $file->getClientOriginalExtension();
             $filename = time() . '_' . uniqid() . '.' . $extension;
 
-            // Store file
+            // ✅ FIX: Store file dengan benar
             $path = $file->storeAs('community_uploads', $filename, 'public');
 
+            // ✅ FIX: Return correct URL path
             return [
-                'path' => 'storage/' . $path,
+                'path' => $path, // Store relative path in database
+                'url' => asset('storage/' . $path), // Full URL for display
                 'type' => $this->getFileTypeCategory($file->getMimeType()),
                 'name' => $originalName,
                 'size' => $file->getSize(),
@@ -525,10 +698,11 @@ class CommunityController extends Controller
             Log::error('File upload failed', [
                 'error' => $e->getMessage(),
                 'filename' => $file->getClientOriginalName(),
-                'mime_type' => $file->getMimeType()
+                'mime_type' => $file->getMimeType(),
+                'size' => $file->getSize()
             ]);
             
-            throw new \Exception('File upload failed');
+            throw new \Exception('File upload failed: ' . $e->getMessage());
         }
     }
 

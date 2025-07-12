@@ -1,24 +1,27 @@
 <?php
 
-use Illuminate\Support\Facades\Route; // Pastikan baris ini ada dan benar
+use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\CommunityController;
-use App\Http\Controllers\NotificationController; // ✅ TAMBAHAN: Import NotificationController
+use App\Http\Controllers\NotificationController;
 
 // Rute default, bisa diarahkan ke halaman login atau register nantinya
 Route::get('/', function () {
     return view('welcome');
 });
 
-// --- Rute Autentikasi (Tidak Dilindungi Middleware) ---
+// ===================================================================
+// AUTHENTICATION ROUTES (No Middleware)
+// ===================================================================
+
 // Rute Registrasi Mahasiswa
 Route::get('/register/student', [AuthController::class, 'showRegisterStudentForm'])->name('register.student');
 Route::post('/register/student', [AuthController::class, 'registerStudent'])->name('register.store.student');
 
 // Rute Registrasi Alumni
-Route::get('/register/alumni', [AuthController::class, 'showRegisterAlumniForm'])->name('register.alumni'); // DIKOREKSI: Route.get menjadi Route::get
+Route::get('/register/alumni', [AuthController::class, 'showRegisterAlumniForm'])->name('register.alumni');
 Route::post('/register/alumni', [AuthController::class, 'registerAlumni'])->name('register.store.alumni');
 
 // Rute Login
@@ -28,88 +31,156 @@ Route::post('/login', [AuthController::class, 'login'])->name('login.store');
 // Rute Logout
 Route::get('/logout', [AuthController::class, 'logout'])->name('logout');
 
-// Rute Halaman Notifikasi Verifikasi Alumni (Tidak perlu dilindungi, karena ini landing page setelah daftar)
+// Rute Halaman Notifikasi Verifikasi Alumni
 Route::get('/alumni/verification-pending', [AuthController::class, 'showAlumniVerificationPendingPage'])->name('alumni.verification.pending');
 
-// Rute Setup Profil dan Setup Kategori Match (Harus bisa diakses bahkan jika profil belum lengkap, tetapi hanya setelah login)
+// ===================================================================
+// PROFILE SETUP ROUTES (Auth Required, Profile Incomplete Allowed)
+// ===================================================================
+
 Route::middleware('auth')->group(function () {
     Route::get('/profile/setup', [AuthController::class, 'showProfileSetupForm'])->name('profile.setup');
     Route::post('/profile/store', [ProfileController::class, 'storeBasicProfile'])->name('profile.store');
-
-    // DITAMBAHKAN: Rute POST untuk menyimpan kategori matching
     Route::post('/match/store-categories', [ProfileController::class, 'storeMatchCategories'])->name('profile.store_match_categories');
 });
 
+// ===================================================================
+// MAIN APPLICATION ROUTES (Auth Required)
+// ===================================================================
 
-// --- Rute yang Dilindungi (Memerlukan Login) - Untuk sementara, cek kelengkapan profil DINOAKTIFKAN ---
-// Middleware 'profile_complete' dihapus sementara
 Route::middleware(['auth'])->group(function () {
-    // Rute untuk halaman home feed (Setelah login dan profil lengkap)
+    
+    // ✅ CORE APPLICATION PAGES
     Route::get('/home', [AuthController::class, 'showHomePage'])->name('home');
-
-    // Rute untuk halaman set up matching (Diakses sebagai bagian dari onboarding, atau edit)
     Route::get('/match/setup', [AuthController::class, 'showMatchSetupForm'])->name('match.setup');
-
-    // Rute untuk halaman finding people
     Route::get('/find-people', [AuthController::class, 'showFindingPeoplePage'])->name('find.people');
-
-    // Rute untuk halaman personal chat
+    Route::get('/profile', [AuthController::class, 'showUserProfilePage'])->name('user.profile');
+    
+    // ✅ USER INTERACTIONS
+    Route::post('/user/interact', [ProfileController::class, 'storeInteraction'])->name('user.interact');
+    
+    // ✅ PERSONAL CHAT ROUTES
     Route::get('/chat/personal', [ChatController::class, 'showPersonalChatPage'])->name('chat.personal');
     Route::post('/chat/send-message', [ChatController::class, 'sendMessage'])->name('chat.send_message');
-    
-    // DITAMBAHKAN: API endpoint untuk real-time chat (opsional)
     Route::get('/chat/messages', [ChatController::class, 'getMessages'])->name('chat.get_messages');
-
-    // ✅ UPDATED: Rute untuk halaman community chat + API endpoints baru
-    Route::get('/community', [CommunityController::class, 'showCommunityChatPage'])->name('community');
-    Route::post('/community/send-message', [CommunityController::class, 'sendGroupMessage'])->name('community.send_message');
     
-    // ✅ NEW: API endpoints untuk real-time community features
-    Route::get('/community/messages', [CommunityController::class, 'getMessages'])->name('community.get_messages');
-    Route::get('/community/stats', [CommunityController::class, 'getStats'])->name('community.stats');
-
-    // Rute untuk halaman profil pengguna (view-only)
-    Route::get('/profile', [AuthController::class, 'showUserProfilePage'])->name('user.profile');
-
-    // Rute POST untuk menyimpan interaksi (like/dislike)
-    Route::post('/user/interact', [ProfileController::class, 'storeInteraction'])->name('user.interact');
-
-    // ✅ NOTIFICATION ROUTES - NEW!
+    // ✅ NOTIFICATION ROUTES
     Route::get('/notifications/count', [NotificationController::class, 'getUnreadCount'])->name('notifications.count');
     Route::get('/notifications', [NotificationController::class, 'getNotifications'])->name('notifications.api');
     Route::post('/notifications/mark-read', [NotificationController::class, 'markAsRead'])->name('notifications.mark_read');
     Route::post('/notifications/mark-all-read', [NotificationController::class, 'markAllAsRead'])->name('notifications.mark_all_read');
     Route::post('/notifications/like-back', [NotificationController::class, 'likeBack'])->name('notifications.like_back');
     Route::get('/notifications/page', [NotificationController::class, 'index'])->name('notifications.index');
-
-    // Tambahkan rute untuk Update Profil (akan kita buat nanti jika ada form update di halaman user.profile)
-    // Route::post('/profile/update', [ProfileController::class, 'updateProfile'])->name('profile.update');
 });
 
+// ===================================================================
+// ✅ ENHANCED COMMUNITY ROUTES (Complete Functionality)
+// ===================================================================
+
 Route::middleware(['auth'])->group(function () {
-    // Existing community routes
+    
+    // ✅ BASIC COMMUNITY ROUTES
     Route::get('/community', [CommunityController::class, 'showCommunityChatPage'])->name('community');
     Route::post('/community/send-message', [CommunityController::class, 'sendGroupMessage'])->name('community.send_message');
     Route::get('/community/messages', [CommunityController::class, 'getMessages'])->name('community.get_messages');
+    Route::get('/community/stats', [CommunityController::class, 'getStats'])->name('community.stats');
     
-    // ✅ NEW: Reactions System Routes
+    // ✅ REACTIONS SYSTEM ROUTES
     Route::post('/community/reactions', [CommunityController::class, 'addReaction'])->name('community.add_reaction');
+    Route::delete('/community/reactions/{messageId}', [CommunityController::class, 'removeReaction'])->name('community.remove_reaction');
+    Route::get('/community/reactions/{messageId}', [CommunityController::class, 'getReactions'])->name('community.get_reactions');
     
-    // ✅ NEW: Comments System Routes  
+    // ✅ COMMENTS SYSTEM ROUTES  
     Route::post('/community/comments', [CommunityController::class, 'addComment'])->name('community.add_comment');
     Route::get('/community/comments', [CommunityController::class, 'loadComments'])->name('community.load_comments');
+    Route::delete('/community/comments/{commentId}', [CommunityController::class, 'deleteComment'])->name('community.delete_comment');
+    Route::put('/community/comments/{commentId}', [CommunityController::class, 'editComment'])->name('community.edit_comment');
     
-    // ✅ NEW: File Management Routes (untuk Phase 2 nanti)
+    // ✅ PERMISSION SYSTEM ROUTES
+    Route::get('/community/permissions', [CommunityController::class, 'getUserGroupPermissions'])->name('community.get_permissions');
+    
+    // ✅ FILE MANAGEMENT ROUTES
     Route::delete('/community/attachments/{messageId}', [CommunityController::class, 'deleteAttachment'])->name('community.delete_attachment');
+    Route::get('/community/attachments/{messageId}/download', [CommunityController::class, 'downloadAttachment'])->name('community.download_attachment');
+    
+    // ✅ MESSAGE MANAGEMENT ROUTES (for moderators/admins)
+    Route::delete('/community/messages/{messageId}', [CommunityController::class, 'deleteMessage'])->name('community.delete_message');
+    Route::put('/community/messages/{messageId}', [CommunityController::class, 'editMessage'])->name('community.edit_message');
+    
+    // ✅ GROUP MANAGEMENT ROUTES (for admins)
+    Route::get('/community/groups', [CommunityController::class, 'getGroups'])->name('community.get_groups');
+    Route::post('/community/groups', [CommunityController::class, 'createGroup'])->name('community.create_group');
+    Route::put('/community/groups/{groupId}', [CommunityController::class, 'updateGroup'])->name('community.update_group');
+    Route::delete('/community/groups/{groupId}', [CommunityController::class, 'deleteGroup'])->name('community.delete_group');
+    Route::post('/community/groups/{groupId}/approve', [CommunityController::class, 'approveGroup'])->name('community.approve_group');
+    Route::post('/community/groups/{groupId}/assign-moderator', [CommunityController::class, 'assignModerator'])->name('community.assign_moderator');
+    
+    // ✅ ADDITIONAL COMMUNITY API ROUTES
+    Route::get('/community/search', [CommunityController::class, 'searchMessages'])->name('community.search_messages');
+    Route::get('/community/trending', [CommunityController::class, 'getTrendingMessages'])->name('community.trending_messages');
+    Route::post('/community/report', [CommunityController::class, 'reportMessage'])->name('community.report_message');
 });
 
-// Debug routes (hanya untuk development)
+// ===================================================================
+// DEBUG ROUTES (Development Only)
+// ===================================================================
+
 Route::middleware(['auth'])->group(function () {
-    Route::get('/debug/match-categories', [DebugController::class, 'debugMatchCategories'])->name('debug.match_categories');
-    Route::get('/debug/query-filtering', [DebugController::class, 'debugQueryFiltering'])->name('debug.query_filtering');
     
-    // Test route untuk cek data user tertentu
+    // ✅ MATCH CATEGORIES DEBUG
+    Route::get('/debug/match-categories', function() {
+        if (!app()->environment('local')) {
+            abort(403, 'Only available in local environment');
+        }
+        
+        $output = [];
+        
+        // 1. Cek current user (jika login)
+        if (Auth::check()) {
+            $currentUser = Auth::user();
+            $output['current_user'] = [
+                'id' => $currentUser->id,
+                'name' => $currentUser->full_name,
+                'raw_match_categories' => DB::table('users')->where('id', $currentUser->id)->value('match_categories'),
+                'model_match_categories' => $currentUser->match_categories,
+                'is_array' => is_array($currentUser->match_categories),
+                'count' => is_array($currentUser->match_categories) ? count($currentUser->match_categories) : 0
+            ];
+        } else {
+            $output['current_user'] = 'Not logged in';
+        }
+        
+        // 2. Cek semua users dengan match_categories
+        $usersWithCategories = App\Models\User::whereNotNull('match_categories')->get();
+        $output['all_users_with_categories'] = [];
+        
+        foreach ($usersWithCategories as $user) {
+            $output['all_users_with_categories'][] = [
+                'id' => $user->id,
+                'name' => $user->full_name,
+                'raw' => DB::table('users')->where('id', $user->id)->value('match_categories'),
+                'model' => $user->match_categories,
+                'is_array' => is_array($user->match_categories)
+            ];
+        }
+        
+        // 3. Test database connection dan structure
+        $output['database_info'] = [
+            'connection' => config('database.default'),
+            'match_categories_column_exists' => Schema::hasColumn('users', 'match_categories'),
+            'total_users' => App\Models\User::count(),
+            'users_with_categories_count' => $usersWithCategories->count()
+        ];
+        
+        return response()->json($output, 200, [], JSON_PRETTY_PRINT);
+    })->name('debug.match_categories');
+    
+    // ✅ USER DEBUG
     Route::get('/debug/user/{id}', function ($id) {
+        if (!app()->environment('local')) {
+            abort(403, 'Only available in local environment');
+        }
+        
         $user = \App\Models\User::find($id);
         if (!$user) {
             return response()->json(['error' => 'User not found'], 404);
@@ -125,8 +196,12 @@ Route::middleware(['auth'])->group(function () {
         ], 200, [], JSON_PRETTY_PRINT);
     })->name('debug.user');
     
-    // Test route untuk update match categories
+    // ✅ UPDATE MATCH CATEGORIES TEST
     Route::post('/debug/update-match-categories', function (\Illuminate\Http\Request $request) {
+        if (!app()->environment('local')) {
+            abort(403, 'Only available in local environment');
+        }
+        
         $user = \Illuminate\Support\Facades\Auth::user();
         
         $categories = $request->input('categories', ['friends', 'jobs']); // default test data
@@ -140,11 +215,49 @@ Route::middleware(['auth'])->group(function () {
             'raw_check' => $user->fresh()->getRawMatchCategories()
         ], 200, [], JSON_PRETTY_PRINT);
     })->name('debug.update_match_categories');
+    
+    // ✅ COMMUNITY DEBUG ROUTES
+    Route::get('/debug/community/permissions/{groupId}', function($groupId) {
+        if (!app()->environment('local')) {
+            abort(403, 'Only available in local environment');
+        }
+        
+        $user = Auth::user();
+        $group = \App\Models\ChatGroup::find($groupId);
+        
+        if (!$group) {
+            return response()->json(['error' => 'Group not found'], 404);
+        }
+        
+        return response()->json([
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->full_name,
+                'role' => $user->role
+            ],
+            'group' => [
+                'id' => $group->id,
+                'name' => $group->name,
+                'creator_id' => $group->creator_id,
+                'moderator_id' => $group->moderator_id,
+                'is_approved' => $group->is_approved
+            ],
+            'permissions' => [
+                'can_post' => (new \App\Http\Controllers\CommunityController())->checkPostPermission($user, $group),
+                'is_admin' => $user->role === 'admin',
+                'is_creator' => $group->creator_id === $user->id,
+                'is_moderator' => $group->moderator_id === $user->id
+            ]
+        ], 200, [], JSON_PRETTY_PRINT);
+    })->name('debug.community.permissions');
 });
 
-// Test seeding route (hanya untuk development)
+// ===================================================================
+// TEST DATA SEEDING ROUTES (Development Only)
+// ===================================================================
+
 Route::get('/debug/seed-test-data', function () {
-    if (!\Illuminate\Support\Facades\App::environment('local')) {
+    if (!app()->environment('local')) {
         abort(403, 'Only available in local environment');
     }
     
@@ -190,66 +303,7 @@ Route::get('/debug/seed-test-data', function () {
     return response()->json(['message' => 'Test data seeded successfully'], 200);
 });
 
-Route::get('/debug-match-categories', function () {
-    if (!app()->environment('local')) {
-        abort(403, 'Only available in local environment');
-    }
-    
-    $output = [];
-    
-    // 1. Cek current user (jika login)
-    if (Auth::check()) {
-        $currentUser = Auth::user();
-        $output['current_user'] = [
-            'id' => $currentUser->id,
-            'name' => $currentUser->full_name,
-            'raw_match_categories' => DB::table('users')->where('id', $currentUser->id)->value('match_categories'),
-            'model_match_categories' => $currentUser->match_categories,
-            'is_array' => is_array($currentUser->match_categories),
-            'count' => is_array($currentUser->match_categories) ? count($currentUser->match_categories) : 0
-        ];
-    } else {
-        $output['current_user'] = 'Not logged in';
-    }
-    
-    // 2. Cek semua users dengan match_categories
-    $usersWithCategories = App\Models\User::whereNotNull('match_categories')->get();
-    $output['all_users_with_categories'] = [];
-    
-    foreach ($usersWithCategories as $user) {
-        $output['all_users_with_categories'][] = [
-            'id' => $user->id,
-            'name' => $user->full_name,
-            'raw' => DB::table('users')->where('id', $user->id)->value('match_categories'),
-            'model' => $user->match_categories,
-            'is_array' => is_array($user->match_categories)
-        ];
-    }
-    
-    // 3. Test database connection dan structure
-    $output['database_info'] = [
-        'connection' => config('database.default'),
-        'match_categories_column_exists' => Schema::hasColumn('users', 'match_categories'),
-        'total_users' => App\Models\User::count(),
-        'users_with_categories_count' => $usersWithCategories->count()
-    ];
-    
-    // 4. Test JSON operations
-    $testUser = $usersWithCategories->first();
-    if ($testUser) {
-        $output['json_test'] = [
-            'original' => $testUser->match_categories,
-            'json_encode' => json_encode($testUser->match_categories),
-            'json_decode_test' => json_decode(json_encode($testUser->match_categories), true),
-            'type_check' => gettype($testUser->match_categories)
-        ];
-    }
-    
-    return response()->json($output, 200, [], JSON_PRETTY_PRINT);
-});
-
-// Route untuk update test data
-Route::get('/debug-create-test-user', function () {
+Route::get('/debug/create-test-user', function () {
     if (!app()->environment('local')) {
         abort(403, 'Only available in local environment');
     }
@@ -301,4 +355,88 @@ Route::get('/debug-create-test-user', function () {
             'file' => $e->getFile()
         ], 500, [], JSON_PRETTY_PRINT);
     }
+});
+
+// ===================================================================
+// TEST COMMUNITY FEATURES (Development Only)
+// ===================================================================
+
+Route::get('/debug/community-setup', function() {
+    if (!app()->environment('local')) {
+        abort(403, 'Only available in local environment');
+    }
+    
+    try {
+        // Create test communities if they don't exist
+        $communities = [
+            [
+                'name' => 'Pengumuman Umum',
+                'description' => 'Saluran untuk pengumuman resmi dari kampus',
+                'creator_id' => 1, // Assuming admin user ID is 1
+                'is_approved' => true
+            ],
+            [
+                'name' => 'Info Beasiswa',
+                'description' => 'Informasi beasiswa dalam dan luar negeri',
+                'creator_id' => 1,
+                'is_approved' => true
+            ],
+            [
+                'name' => 'PKM & Kompetisi',
+                'description' => 'Info PKM, lomba, dan kompetisi mahasiswa',
+                'creator_id' => 1,
+                'is_approved' => true
+            ]
+        ];
+        
+        foreach ($communities as $communityData) {
+            \App\Models\ChatGroup::updateOrCreate(
+                ['name' => $communityData['name']],
+                $communityData
+            );
+        }
+        
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Test communities created successfully',
+            'communities' => \App\Models\ChatGroup::all(['id', 'name', 'creator_id', 'is_approved'])
+        ], 200, [], JSON_PRETTY_PRINT);
+        
+    } catch (\Exception $e) {
+        return response()->json([
+            'status' => 'error',
+            'message' => $e->getMessage()
+        ], 500, [], JSON_PRETTY_PRINT);
+    }
+});
+
+// ===================================================================
+// API TESTING ROUTES (Development Only)
+// ===================================================================
+
+Route::get('/debug/test-routes', function() {
+    if (!app()->environment('local')) {
+        abort(403, 'Only available in local environment');
+    }
+    
+    $routes = [
+        'Community Routes' => [
+            'GET /community' => route('community'),
+            'POST /community/send-message' => route('community.send_message'),
+            'POST /community/reactions' => route('community.add_reaction'),
+            'POST /community/comments' => route('community.add_comment'),
+            'GET /community/permissions' => route('community.get_permissions'),
+        ],
+        'Debug Routes' => [
+            'GET /debug/match-categories' => route('debug.match_categories'),
+            'GET /debug/user/{id}' => url('/debug/user/1'),
+            'POST /debug/update-match-categories' => route('debug.update_match_categories'),
+        ]
+    ];
+    
+    return response()->json([
+        'status' => 'success',
+        'available_routes' => $routes,
+        'note' => 'These routes are available for testing the community features'
+    ], 200, [], JSON_PRETTY_PRINT);
 });

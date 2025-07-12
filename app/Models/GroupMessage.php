@@ -141,11 +141,21 @@ class GroupMessage extends Model
     }
 
     /**
-     * Get attachment URL
+     * ✅ FIXED: Get attachment URL
      */
     public function getAttachmentUrlAttribute()
     {
-        return $this->attachment_path ? asset($this->attachment_path) : null;
+        if (!$this->attachment_path) {
+            return null;
+        }
+        
+        // If path already contains 'storage/', it's already a full path
+        if (str_starts_with($this->attachment_path, 'storage/')) {
+            return asset($this->attachment_path);
+        }
+        
+        // Otherwise, prepend 'storage/'
+        return asset('storage/' . $this->attachment_path);
     }
 
     /**
@@ -272,6 +282,11 @@ class GroupMessage extends Model
             return true;
         }
         
+        // Group creator can edit messages in their group
+        if ($this->group && $this->group->creator_id === $user->id) {
+            return true;
+        }
+        
         return false;
     }
 
@@ -341,5 +356,29 @@ class GroupMessage extends Model
     public function getEngagementScoreAttribute()
     {
         return $this->total_reactions + ($this->total_comments * 2); // Comments worth more
+    }
+
+    /**
+     * ✅ NEW: Check if message is recent (within last 24 hours)
+     */
+    public function isRecent()
+    {
+        return $this->created_at->greaterThan(now()->subDay());
+    }
+
+    /**
+     * ✅ NEW: Get readable time difference
+     */
+    public function getTimeAgoAttribute()
+    {
+        return $this->created_at->diffForHumans();
+    }
+
+    /**
+     * ✅ NEW: Format created_at for display
+     */
+    public function getFormattedCreatedAtAttribute()
+    {
+        return $this->created_at->format('H:i A, d M Y');
     }
 }
