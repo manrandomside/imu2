@@ -86,6 +86,23 @@ Route::middleware(['auth'])->group(function () {
     // Route::post('/profile/update', [ProfileController::class, 'updateProfile'])->name('profile.update');
 });
 
+Route::middleware(['auth'])->group(function () {
+    // Existing community routes
+    Route::get('/community', [CommunityController::class, 'showCommunityChatPage'])->name('community');
+    Route::post('/community/send-message', [CommunityController::class, 'sendGroupMessage'])->name('community.send_message');
+    Route::get('/community/messages', [CommunityController::class, 'getMessages'])->name('community.get_messages');
+    
+    // ✅ NEW: Reactions System Routes
+    Route::post('/community/reactions', [CommunityController::class, 'addReaction'])->name('community.add_reaction');
+    
+    // ✅ NEW: Comments System Routes  
+    Route::post('/community/comments', [CommunityController::class, 'addComment'])->name('community.add_comment');
+    Route::get('/community/comments', [CommunityController::class, 'loadComments'])->name('community.load_comments');
+    
+    // ✅ NEW: File Management Routes (untuk Phase 2 nanti)
+    Route::delete('/community/attachments/{messageId}', [CommunityController::class, 'deleteAttachment'])->name('community.delete_attachment');
+});
+
 // Debug routes (hanya untuk development)
 Route::middleware(['auth'])->group(function () {
     Route::get('/debug/match-categories', [DebugController::class, 'debugMatchCategories'])->name('debug.match_categories');
