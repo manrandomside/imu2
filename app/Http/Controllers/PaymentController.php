@@ -10,6 +10,7 @@ use Illuminate\Validation\ValidationException;
 use App\Models\Payment;
 use App\Models\ContentSubmission;
 use App\Models\Notification;
+use Illuminate\Support\Str;
 
 class PaymentController extends Controller
 {
@@ -30,7 +31,7 @@ class PaymentController extends Controller
                 ->with('error', 'Konten tidak memerlukan pembayaran pada status saat ini.');
         }
 
-        // Check if payment already exists
+        // Check if payment already exists and not rejected
         if ($submission->payment && $submission->payment->status !== 'rejected') {
             return redirect()
                 ->route('payments.show', $submission->payment)
@@ -79,31 +80,43 @@ class PaymentController extends Controller
                 'payment_details.sender_account.required_if' => 'Nomor rekening pengirim wajib diisi untuk transfer bank.',
             ]);
 
-            // Handle payment proof upload
-            $proofPath = null;
-            if ($request->hasFile('payment_proof')) {
-                $file = $request->file('payment_proof');
-                $filename = time() . '_payment_' . uniqid() . '.' . $file->getClientOriginalExtension();
-                $proofPath = $file->storeAs('payment_proofs', $filename, 'public');
-            }
+            // Handle payment proof upload using consistent method
+            $proofData = $this->handleFileUpload($request->file('payment_proof'), 'payment_proofs');
 
-            // Create or update payment
-            $payment = Payment::updateOrCreate(
-                [
-                    'user_id' => Auth::id(),
-                    'submission_id' => $submission->id,
-                ],
-                [
+            // Check if payment already exists for this submission
+            $existingPayment = $submission->payment;
+            
+            if ($existingPayment && $existingPayment->status === 'rejected') {
+                // Update existing rejected payment
+                $existingPayment->update([
                     'amount' => $submission->category->price,
                     'payment_method' => $request->payment_method,
-                    'payment_proof_path' => $proofPath,
+                    'payment_proof_path' => $proofData['path'],
                     'status' => 'pending',
-                    'payment_details' => $request->payment_details,
-                ]
-            );
+                    'payment_details' => $request->payment_details ?? [],
+                    'rejection_reason' => null,
+                    'confirmed_by' => null,
+                    'confirmed_at' => null,
+                ]);
+                $payment = $existingPayment;
+            } else {
+                // Create new payment
+                $payment = Payment::create([
+                    'user_id' => Auth::id(),
+                    'submission_id' => $submission->id,
+                    'amount' => $submission->category->price,
+                    'payment_method' => $request->payment_method,
+                    'payment_proof_path' => $proofData['path'],
+                    'status' => 'pending',
+                    'payment_details' => $request->payment_details ?? [],
+                ]);
+            }
 
-            // Create notification for admin
-            Notification::createPaymentNotification($payment->id, 'payment_submitted');
+            // Update submission payment reference
+            $submission->update(['payment_id' => $payment->id]);
+
+            // Create notification for admins - use correct notification type
+            Notification::createPaymentNotification($payment->id, 'payment_pending');
 
             Log::info('Payment submitted', [
                 'payment_id' => $payment->id,
@@ -115,7 +128,7 @@ class PaymentController extends Controller
 
             return redirect()
                 ->route('payments.show', $payment)
-                ->with('success', 'Pembayaran berhasil dikirim! Kami akan memverifikasi dalam 1x24 jam.');
+                ->with('success', 'Bukti pembayaran berhasil diunggah! Admin akan memverifikasi dalam 1x24 jam.');
 
         } catch (ValidationException $e) {
             return back()->withErrors($e->errors())->withInput();
@@ -138,7 +151,7 @@ class PaymentController extends Controller
      */
     public function show(Payment $payment)
     {
-        // Check ownership
+        // Check ownership or admin/moderator privileges
         if ($payment->user_id !== Auth::id() && !Auth::user()->hasModeratorPrivileges()) {
             abort(403, 'Unauthorized access');
         }
@@ -199,29 +212,28 @@ class PaymentController extends Controller
                 'payment_details.transaction_id' => ['nullable', 'string', 'max:255'],
             ]);
 
-            // Handle new payment proof upload
+            // Handle new payment proof upload if provided
             if ($request->hasFile('payment_proof')) {
                 // Delete old proof
                 $payment->deleteProof();
                 
-                // Upload new proof
-                $file = $request->file('payment_proof');
-                $filename = time() . '_payment_' . uniqid() . '.' . $file->getClientOriginalExtension();
-                $proofPath = $file->storeAs('payment_proofs', $filename, 'public');
-                
-                $payment->payment_proof_path = $proofPath;
+                // Upload new proof using consistent method
+                $proofData = $this->handleFileUpload($request->file('payment_proof'), 'payment_proofs');
+                $payment->payment_proof_path = $proofData['path'];
             }
 
             // Update payment
             $payment->update([
                 'payment_method' => $request->payment_method,
-                'payment_details' => $request->payment_details,
+                'payment_details' => $request->payment_details ?? [],
                 'status' => 'pending', // Reset to pending
                 'rejection_reason' => null,
+                'confirmed_by' => null,
+                'confirmed_at' => null,
             ]);
 
             // Create notification for admin about resubmission
-            Notification::createPaymentNotification($payment->id, 'payment_resubmitted');
+            Notification::createPaymentNotification($payment->id, 'payment_pending');
 
             return redirect()
                 ->route('payments.show', $payment)
@@ -243,14 +255,65 @@ class PaymentController extends Controller
     }
 
     /**
+     * Download payment proof
+     */
+    public function downloadProof(Payment $payment)
+    {
+        // Check access permissions
+        if ($payment->user_id !== Auth::id() && !Auth::user()->hasModeratorPrivileges()) {
+            abort(403, 'Unauthorized access');
+        }
+
+        if (!$payment->payment_proof_path || !Storage::disk('public')->exists($payment->payment_proof_path)) {
+            abort(404, 'Payment proof not found');
+        }
+
+        $filename = 'bukti_pembayaran_' . $payment->id . '_' . now()->format('Y-m-d') . '.' . pathinfo($payment->payment_proof_path, PATHINFO_EXTENSION);
+        
+        return Storage::disk('public')->download($payment->payment_proof_path, $filename);
+    }
+
+    /**
+     * ✅ ADDED: Handle file upload - consistent with ContentSubmissionController
+     */
+    private function handleFileUpload($file, $directory = 'uploads')
+    {
+        try {
+            // Generate unique filename
+            $originalName = $file->getClientOriginalName();
+            $extension = $file->getClientOriginalExtension();
+            $filename = Str::slug(pathinfo($originalName, PATHINFO_FILENAME)) . '_' . time() . '.' . $extension;
+            
+            // Store file
+            $path = $file->storeAs($directory, $filename, 'public');
+            
+            return [
+                'path' => $path,
+                'name' => $originalName,
+                'type' => $file->getMimeType(),
+                'size' => $file->getSize(),
+            ];
+        } catch (\Exception $e) {
+            Log::error('File upload error', [
+                'error' => $e->getMessage(),
+                'file' => $originalName ?? 'unknown'
+            ]);
+            
+            throw new \Exception('Gagal mengupload file. Silakan coba lagi.');
+        }
+    }
+
+    // ===== ADMIN METHODS =====
+
+    /**
      * Display admin payment dashboard
      */
     public function adminIndex(Request $request)
     {
         $user = Auth::user();
         
-        // Check if user is admin
-        if (!$user->isAdmin()) {
+        // ✅ UPDATED: Use hasModeratorPrivileges instead of just isAdmin
+        if (!$user->hasModeratorPrivileges()) {
             abort(403, 'Unauthorized access');
         }
 
@@ -301,7 +364,7 @@ class PaymentController extends Controller
     {
         $user = Auth::user();
         
-        if (!$user->isAdmin()) {
+        if (!$user->hasModeratorPrivileges()) {
             abort(403, 'Unauthorized access');
         }
 
@@ -327,7 +390,7 @@ class PaymentController extends Controller
     {
         $user = Auth::user();
         
-        if (!$user->isAdmin()) {
+        if (!$user->hasModeratorPrivileges()) {
             abort(403, 'Unauthorized access');
         }
 
@@ -339,11 +402,11 @@ class PaymentController extends Controller
             'rejection_reason.max' => 'Alasan penolakan maksimal 500 karakter.',
         ]);
 
-        if (!$payment->canBeConfirmed()) {
+        if (!$payment->canBeRejected()) {
             return back()->with('error', 'Pembayaran tidak dapat ditolak pada status saat ini.');
         }
 
-        $payment->reject($user->id, $request->rejection_reason);
+        $payment->reject($request->rejection_reason, $user->id);
 
         Log::info('Payment rejected', [
             'payment_id' => $payment->id,
@@ -355,75 +418,29 @@ class PaymentController extends Controller
     }
 
     /**
-     * Download payment proof
-     */
-    public function downloadProof(Payment $payment)
-    {
-        // Check access permissions
-        if ($payment->user_id !== Auth::id() && !Auth::user()->isAdmin()) {
-            abort(403, 'Unauthorized access');
-        }
-
-        if (!$payment->payment_proof_path) {
-            abort(404, 'Payment proof not found');
-        }
-
-        $filePath = storage_path('app/public/' . $payment->payment_proof_path);
-        
-        if (!file_exists($filePath)) {
-            abort(404, 'Payment proof file not found');
-        }
-
-        $filename = 'bukti_pembayaran_' . $payment->id . '.' . pathinfo($payment->payment_proof_path, PATHINFO_EXTENSION);
-        
-        return response()->download($filePath, $filename);
-    }
-
-    /**
-     * Get payment statistics for API
+     * ✅ ENHANCED: Get payment statistics for API
      */
     public function getStats(Request $request)
     {
         $user = Auth::user();
         
-        if (!$user->isAdmin()) {
+        if (!$user->hasModeratorPrivileges()) {
             abort(403, 'Unauthorized access');
         }
 
-        $dateFrom = $request->get('date_from');
-        $dateTo = $request->get('date_to');
-        
-        $stats = [
-            'total_payments' => Payment::count(),
-            'pending_payments' => Payment::pending()->count(),
-            'confirmed_payments' => Payment::confirmed()->count(),
-            'rejected_payments' => Payment::rejected()->count(),
-            'total_revenue' => Payment::getRevenue($dateFrom, $dateTo),
-            'revenue_breakdown' => [
-                'transfer_bank' => Payment::confirmed()->where('payment_method', 'transfer_bank')->sum('amount'),
-                'dana' => Payment::confirmed()->where('payment_method', 'dana')->sum('amount'),
-                'gopay' => Payment::confirmed()->where('payment_method', 'gopay')->sum('amount'),
-                'ovo' => Payment::confirmed()->where('payment_method', 'ovo')->sum('amount'),
-            ],
-            'daily_revenue' => Payment::confirmed()
-                ->selectRaw('DATE(confirmed_at) as date, SUM(amount) as revenue')
-                ->groupBy('date')
-                ->orderBy('date', 'desc')
-                ->limit(30)
-                ->get(),
-        ];
+        $stats = Payment::getAdminStats();
         
         return response()->json($stats);
     }
 
     /**
-     * Bulk actions for payments
+     * ✅ ENHANCED: Bulk actions for payments
      */
     public function bulkAction(Request $request)
     {
         $user = Auth::user();
         
-        if (!$user->isAdmin()) {
+        if (!$user->hasModeratorPrivileges()) {
             abort(403, 'Unauthorized access');
         }
 
@@ -434,23 +451,165 @@ class PaymentController extends Controller
             'rejection_reason' => ['required_if:action,reject', 'string', 'min:10', 'max:500'],
         ]);
 
-        $payments = Payment::whereIn('id', $request->payment_ids)->get();
+        $paymentIds = $request->payment_ids;
+        $action = $request->action;
         $successCount = 0;
         
-        foreach ($payments as $payment) {
-            if ($payment->canBeConfirmed()) {
-                if ($request->action === 'confirm') {
-                    $payment->confirm($user->id);
-                    $successCount++;
-                } elseif ($request->action === 'reject') {
-                    $payment->reject($user->id, $request->rejection_reason);
-                    $successCount++;
-                }
+        foreach ($paymentIds as $paymentId) {
+            $payment = Payment::find($paymentId);
+            
+            if (!$payment) continue;
+
+            if ($action === 'confirm' && $payment->canBeConfirmed()) {
+                $payment->confirm($user->id);
+                $successCount++;
+            } elseif ($action === 'reject' && $payment->canBeRejected()) {
+                $payment->reject($request->rejection_reason, $user->id);
+                $successCount++;
             }
         }
 
-        $actionText = $request->action === 'confirm' ? 'dikonfirmasi' : 'ditolak';
+        $actionText = $action === 'confirm' ? 'dikonfirmasi' : 'ditolak';
         
         return back()->with('success', "{$successCount} pembayaran berhasil {$actionText}.");
+    }
+
+    /**
+     * ✅ ADDED: Get payment methods for API (useful for frontend)
+     */
+    public function getPaymentMethods()
+    {
+        $paymentMethods = Payment::getPaymentMethods();
+        
+        return response()->json([
+            'payment_methods' => $paymentMethods
+        ]);
+    }
+
+    /**
+     * ✅ ADDED: Get user payment history
+     */
+    public function userPayments(Request $request)
+    {
+        $user = Auth::user();
+        
+        $payments = Payment::where('user_id', $user->id)
+                          ->with(['submission.category'])
+                          ->orderBy('created_at', 'desc')
+                          ->paginate(10);
+        
+        $stats = [
+            'total' => $user->payments()->count(),
+            'pending' => $user->payments()->where('status', 'pending')->count(),
+            'confirmed' => $user->payments()->where('status', 'confirmed')->count(),
+            'rejected' => $user->payments()->where('status', 'rejected')->count(),
+            'total_spent' => $user->payments()->where('status', 'confirmed')->sum('amount'),
+        ];
+        
+        return view('payments.user-history', compact('payments', 'stats'));
+    }
+
+    /**
+     * ✅ ADDED: Export payments to CSV (for admin)
+     */
+    public function exportCsv(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user->hasModeratorPrivileges()) {
+            abort(403, 'Unauthorized access');
+        }
+
+        $query = Payment::with(['user', 'submission.category']);
+        
+        // Apply filters
+        if ($request->status && $request->status !== 'all') {
+            $query->where('status', $request->status);
+        }
+        
+        if ($request->date_from) {
+            $query->whereDate('created_at', '>=', $request->date_from);
+        }
+        
+        if ($request->date_to) {
+            $query->whereDate('created_at', '<=', $request->date_to);
+        }
+        
+        $payments = $query->orderBy('created_at', 'desc')->get();
+        
+        $filename = 'payments_export_' . now()->format('Y-m-d_H-i-s') . '.csv';
+        
+        $headers = [
+            'Content-Type' => 'text/csv',
+            'Content-Disposition' => "attachment; filename=\"{$filename}\"",
+        ];
+        
+        $callback = function() use ($payments) {
+            $file = fopen('php://output', 'w');
+            
+            // Header
+            fputcsv($file, [
+                'ID', 'User', 'Submission', 'Category', 'Amount', 
+                'Method', 'Status', 'Created At', 'Confirmed At'
+            ]);
+            
+            // Data
+            foreach ($payments as $payment) {
+                fputcsv($file, [
+                    $payment->id,
+                    $payment->user->full_name,
+                    $payment->submission->title,
+                    $payment->submission->category->name,
+                    $payment->amount,
+                    $payment->payment_method_display,
+                    $payment->status_display,
+                    $payment->created_at->format('Y-m-d H:i:s'),
+                    $payment->confirmed_at ? $payment->confirmed_at->format('Y-m-d H:i:s') : '',
+                ]);
+            }
+            
+            fclose($file);
+        };
+        
+        return response()->stream($callback, 200, $headers);
+    }
+
+    /**
+     * ✅ ADDED: Get payment statistics by date range
+     */
+    public function getStatsByDateRange(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user->hasModeratorPrivileges()) {
+            abort(403, 'Unauthorized access');
+        }
+
+        $request->validate([
+            'date_from' => 'required|date',
+            'date_to' => 'required|date|after_or_equal:date_from',
+        ]);
+
+        $dateFrom = $request->date_from;
+        $dateTo = $request->date_to;
+
+        $stats = [
+            'total_payments' => Payment::whereBetween('created_at', [$dateFrom, $dateTo])->count(),
+            'confirmed_payments' => Payment::confirmed()->whereBetween('confirmed_at', [$dateFrom, $dateTo])->count(),
+            'total_revenue' => Payment::confirmed()->whereBetween('confirmed_at', [$dateFrom, $dateTo])->sum('amount'),
+            'daily_breakdown' => Payment::confirmed()
+                ->whereBetween('confirmed_at', [$dateFrom, $dateTo])
+                ->selectRaw('DATE(confirmed_at) as date, COUNT(*) as count, SUM(amount) as revenue')
+                ->groupBy('date')
+                ->orderBy('date')
+                ->get(),
+            'method_breakdown' => Payment::confirmed()
+                ->whereBetween('confirmed_at', [$dateFrom, $dateTo])
+                ->selectRaw('payment_method, COUNT(*) as count, SUM(amount) as revenue')
+                ->groupBy('payment_method')
+                ->get(),
+        ];
+
+        return response()->json($stats);
     }
 }

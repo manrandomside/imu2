@@ -82,6 +82,24 @@ class User extends Authenticatable
     }
 
     /**
+     * ✅ ADDED: Additional role checks for submission system
+     */
+    public function isMahasiswa()
+    {
+        return $this->role === 'mahasiswa';
+    }
+
+    public function isAlumni()
+    {
+        return $this->role === 'alumni';
+    }
+
+    public function isDosen()
+    {
+        return $this->role === 'tenaga_pendidik';
+    }
+
+    /**
      * ✅ FIXED: Get user role display name (required by view)
      */
     public function getRoleDisplayAttribute()
@@ -103,14 +121,14 @@ class User extends Authenticatable
     public function getRoleBadgeColorAttribute()
     {
         $colors = [
-            'admin' => 'bg-red-500 text-white',
-            'moderator' => 'bg-purple-500 text-white',
-            'mahasiswa' => 'bg-blue-500 text-white',
-            'alumni' => 'bg-green-500 text-white',
-            'tenaga_pendidik' => 'bg-yellow-500 text-black'
+            'admin' => 'bg-red-100 text-red-800',
+            'moderator' => 'bg-blue-100 text-blue-800',
+            'mahasiswa' => 'bg-green-100 text-green-800',
+            'alumni' => 'bg-purple-100 text-purple-800',
+            'tenaga_pendidik' => 'bg-yellow-100 text-yellow-800'
         ];
 
-        return $colors[$this->role] ?? 'bg-gray-500 text-white';
+        return $colors[$this->role] ?? 'bg-gray-100 text-gray-800';
     }
 
     /**
@@ -147,6 +165,39 @@ class User extends Authenticatable
     public function createdCommunities()
     {
         return $this->hasMany(ChatGroup::class, 'creator_id');
+    }
+
+    /**
+     * ✅ ADDED: SUBMISSION SYSTEM RELATIONSHIPS
+     */
+    public function submissions()
+    {
+        return $this->hasMany(ContentSubmission::class);
+    }
+
+    public function payments()
+    {
+        return $this->hasMany(Payment::class);
+    }
+
+    public function notifications()
+    {
+        return $this->hasMany(Notification::class);
+    }
+
+    public function sentMessages()
+    {
+        return $this->hasMany(GroupMessage::class, 'sender_id');
+    }
+
+    public function approvedSubmissions()
+    {
+        return $this->hasMany(ContentSubmission::class, 'approved_by');
+    }
+
+    public function confirmedPayments()
+    {
+        return $this->hasMany(Payment::class, 'confirmed_by');
     }
 
     /**
@@ -205,6 +256,113 @@ class User extends Authenticatable
     }
 
     // ===============================================
+    // ✅ ADDED: SUBMISSION SYSTEM PERMISSION METHODS
+    // ===============================================
+
+    /**
+     * Check if user can create submissions
+     */
+    public function canCreateSubmissions()
+    {
+        return $this->is_verified; // Only verified users can create submissions
+    }
+
+    /**
+     * Check if user can manage submissions (approve/reject)
+     */
+    public function canManageSubmissions()
+    {
+        return $this->hasModeratorPrivileges();
+    }
+
+    /**
+     * Check if user can manage payments (confirm/reject)
+     */
+    public function canManagePayments()
+    {
+        return $this->hasModeratorPrivileges();
+    }
+
+    /**
+     * Check if user can moderate specific submission
+     */
+    public function canModerateSubmission($submission)
+    {
+        if ($this->isAdmin()) {
+            return true;
+        }
+
+        // Check if user owns the submission
+        if ($submission->user_id === $this->id) {
+            return true;
+        }
+
+        // Check if user is moderator for the submission's category community
+        if ($this->isModerator() && $submission->category) {
+            // This would need to be implemented based on your category-community relationship
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Get submission statistics for this user
+     */
+    public function getSubmissionStats()
+    {
+        if (!$this->canCreateSubmissions()) {
+            return null;
+        }
+
+        return [
+            'total' => $this->submissions()->count(),
+            'pending_payment' => $this->submissions()->where('status', 'pending_payment')->count(),
+            'pending_approval' => $this->submissions()->where('status', 'pending_approval')->count(),
+            'approved' => $this->submissions()->where('status', 'approved')->count(),
+            'rejected' => $this->submissions()->where('status', 'rejected')->count(),
+            'published' => $this->submissions()->where('status', 'published')->count(),
+        ];
+    }
+
+    /**
+     * Get payment statistics for this user
+     */
+    public function getPaymentStats()
+    {
+        return [
+            'total_payments' => $this->payments()->count(),
+            'pending_payments' => $this->payments()->where('status', 'pending')->count(),
+            'confirmed_payments' => $this->payments()->where('status', 'confirmed')->count(),
+            'rejected_payments' => $this->payments()->where('status', 'rejected')->count(),
+            'total_spent' => $this->payments()->where('status', 'confirmed')->sum('amount'),
+        ];
+    }
+
+    /**
+     * Get unread notifications count
+     */
+    public function getUnreadNotificationsCount()
+    {
+        return $this->notifications()->where('is_read', false)->count();
+    }
+
+    /**
+     * Get user initials for avatar
+     */
+    public function getInitials()
+    {
+        $names = explode(' ', $this->full_name);
+        $initials = '';
+        
+        foreach ($names as $name) {
+            $initials .= strtoupper(substr($name, 0, 1));
+        }
+        
+        return $initials;
+    }
+
+    // ===============================================
     // ✅ SCOPE METHODS FOR FILTERING
     // ===============================================
 
@@ -238,6 +396,29 @@ class User extends Authenticatable
     public function scopeRegularUsers($query)
     {
         return $query->whereIn('role', ['mahasiswa', 'alumni', 'tenaga_pendidik']);
+    }
+
+    /**
+     * ✅ ADDED: Additional scopes for submission system
+     */
+    public function scopeVerified($query)
+    {
+        return $query->where('is_verified', true);
+    }
+
+    public function scopeByRole($query, $role)
+    {
+        return $query->where('role', $role);
+    }
+
+    public function scopeByFakultas($query, $fakultas)
+    {
+        return $query->where('fakultas', $fakultas);
+    }
+
+    public function scopeByProdi($query, $prodi)
+    {
+        return $query->where('prodi', $prodi);
     }
 
     // ===============================================
@@ -523,6 +704,10 @@ class User extends Authenticatable
         echo "Role Icon: " . $this->role_icon . "\n";
         echo "Is Admin: " . ($this->isAdmin() ? 'YES' : 'NO') . "\n";
         echo "Is Moderator: " . ($this->isModerator() ? 'YES' : 'NO') . "\n";
+        echo "Has Moderator Privileges: " . ($this->hasModeratorPrivileges() ? 'YES' : 'NO') . "\n";
+        echo "Can Create Submissions: " . ($this->canCreateSubmissions() ? 'YES' : 'NO') . "\n";
+        echo "Can Manage Submissions: " . ($this->canManageSubmissions() ? 'YES' : 'NO') . "\n";
+        echo "Can Manage Payments: " . ($this->canManagePayments() ? 'YES' : 'NO') . "\n";
         echo "============================================\n\n";
         
         return $this;
@@ -556,7 +741,8 @@ class User extends Authenticatable
             echo "  Categories: " . json_encode($user->match_categories) . "\n";
             echo "  Is Array: " . (is_array($user->match_categories) ? 'YES' : 'NO') . "\n";
             echo "  Count: " . (is_array($user->match_categories) ? count($user->match_categories) : 0) . "\n";
-            echo "  Role Display: " . $user->role_display . "\n\n";
+            echo "  Role Display: " . $user->role_display . "\n";
+            echo "  Can Create Submissions: " . ($user->canCreateSubmissions() ? 'YES' : 'NO') . "\n\n";
         }
         
         echo "=====================================\n\n";

@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Str;
 use App\Models\ContentSubmission;
 use App\Models\SubmissionCategory;
 use App\Models\Payment;
@@ -21,11 +22,38 @@ class ContentSubmissionController extends Controller
     {
         $user = Auth::user();
         
-        // Get user submissions with pagination
-        $submissions = ContentSubmission::where('user_id', $user->id)
-                                        ->with(['category', 'payment', 'approvedBy'])
-                                        ->orderBy('created_at', 'desc')
-                                        ->paginate(10);
+        // Check if user can create submissions
+        if (!$user->canCreateSubmissions()) {
+            return redirect()->route('home')
+                ->with('error', 'Akun Anda harus diverifikasi terlebih dahulu untuk dapat membuat submission.');
+        }
+        
+        // Get filters
+        $status = $request->get('status');
+        $category = $request->get('category');
+        $search = $request->get('search');
+        
+        // Build query
+        $query = ContentSubmission::where('user_id', $user->id)
+                                 ->with(['category', 'payment', 'approvedBy']);
+        
+        // Apply filters
+        if ($status) {
+            $query->where('status', $status);
+        }
+        
+        if ($category) {
+            $query->where('category_id', $category);
+        }
+        
+        if ($search) {
+            $query->where(function($q) use ($search) {
+                $q->where('title', 'LIKE', "%{$search}%")
+                  ->orWhere('description', 'LIKE', "%{$search}%");
+            });
+        }
+        
+        $submissions = $query->orderBy('created_at', 'desc')->paginate(10);
         
         // Get user statistics
         $stats = ContentSubmission::getUserSubmissionStats($user->id);
@@ -33,7 +61,7 @@ class ContentSubmissionController extends Controller
         // Get active categories
         $categories = SubmissionCategory::getActiveCategories();
         
-        return view('submissions.index', compact('submissions', 'stats', 'categories'));
+        return view('submissions.index', compact('submissions', 'stats', 'categories', 'status', 'category', 'search'));
     }
 
     /**
@@ -41,6 +69,14 @@ class ContentSubmissionController extends Controller
      */
     public function create(Request $request)
     {
+        $user = Auth::user();
+        
+        // Check if user can create submissions
+        if (!$user->canCreateSubmissions()) {
+            return redirect()->route('submissions.index')
+                ->with('error', 'Akun Anda harus diverifikasi terlebih dahulu untuk dapat membuat submission.');
+        }
+        
         $categories = SubmissionCategory::getActiveCategories();
         $selectedCategoryId = $request->get('category');
         $selectedCategory = null;
@@ -59,6 +95,11 @@ class ContentSubmissionController extends Controller
     {
         try {
             $user = Auth::user();
+            
+            // Check if user can create submissions
+            if (!$user->canCreateSubmissions()) {
+                return back()->with('error', 'Akun Anda harus diverifikasi terlebih dahulu untuk dapat membuat submission.');
+            }
             
             // Validation
             $request->validate([
@@ -79,6 +120,11 @@ class ContentSubmissionController extends Controller
             ]);
 
             $category = SubmissionCategory::findOrFail($request->category_id);
+            
+            // Check if category is active and can accept new submissions
+            if (!$category->canAcceptNewSubmissions()) {
+                return back()->with('error', 'Kategori ini sedang tidak menerima submission baru.');
+            }
             
             // Handle file upload
             $attachmentData = null;
@@ -140,7 +186,7 @@ class ContentSubmissionController extends Controller
      */
     public function show(ContentSubmission $submission)
     {
-        // Check ownership
+        // Check ownership or moderator privileges
         if ($submission->user_id !== Auth::id() && !Auth::user()->hasModeratorPrivileges()) {
             abort(403, 'Unauthorized access');
         }
@@ -270,8 +316,8 @@ class ContentSubmissionController extends Controller
                 abort(403, 'Unauthorized access');
             }
 
-            // Only allow deletion for certain statuses
-            if (!in_array($submission->status, ['pending_payment', 'rejected'])) {
+            // Check if can be deleted
+            if (!$submission->canBeDeleted()) {
                 return redirect()
                     ->route('submissions.show', $submission)
                     ->with('error', 'Konten tidak dapat dihapus pada status saat ini.');
@@ -309,6 +355,8 @@ class ContentSubmissionController extends Controller
         }
     }
 
+    // ===== ADMIN METHODS =====
+
     /**
      * Show admin approval dashboard
      */
@@ -324,10 +372,14 @@ class ContentSubmissionController extends Controller
         // Get filters
         $status = $request->get('status', 'pending_approval');
         $category = $request->get('category');
+        $search = $request->get('search');
+        $sort = $request->get('sort', 'created_at');
+        $direction = $request->get('direction', 'desc');
         
         // Build query
         $query = ContentSubmission::with(['user', 'category', 'payment']);
         
+        // Apply filters
         if ($status && $status !== 'all') {
             $query->where('status', $status);
         }
@@ -336,7 +388,26 @@ class ContentSubmissionController extends Controller
             $query->where('category_id', $category);
         }
         
-        $submissions = $query->orderBy('created_at', 'desc')->paginate(15);
+        if ($search) {
+            $query->where(function($q) use ($search) {
+                $q->where('title', 'LIKE', "%{$search}%")
+                  ->orWhere('description', 'LIKE', "%{$search}%")
+                  ->orWhereHas('user', function($userQuery) use ($search) {
+                      $userQuery->where('full_name', 'LIKE', "%{$search}%")
+                               ->orWhere('email', 'LIKE', "%{$search}%");
+                  });
+            });
+        }
+        
+        // Apply sorting
+        $allowedSorts = ['created_at', 'title', 'status', 'submitted_at', 'approved_at'];
+        if (in_array($sort, $allowedSorts)) {
+            $query->orderBy($sort, $direction);
+        } else {
+            $query->orderBy('created_at', 'desc');
+        }
+        
+        $submissions = $query->paginate(15);
         
         // Get statistics
         $stats = ContentSubmission::getAdminStats();
@@ -351,7 +422,10 @@ class ContentSubmissionController extends Controller
             'paymentStats', 
             'categories',
             'status',
-            'category'
+            'category',
+            'search',
+            'sort',
+            'direction'
         ));
     }
 
@@ -397,11 +471,11 @@ class ContentSubmissionController extends Controller
             'rejection_reason.max' => 'Alasan penolakan maksimal 500 karakter.',
         ]);
 
-        if (!$submission->canBeApproved()) {
+        if (!$submission->canBeRejected()) {
             return back()->with('error', 'Konten tidak dapat ditolak pada status saat ini.');
         }
 
-        $submission->reject($user->id, $request->rejection_reason);
+        $submission->reject($request->rejection_reason, $user->id);
 
         return back()->with('success', 'Konten telah ditolak.');
     }
@@ -431,6 +505,112 @@ class ContentSubmissionController extends Controller
     }
 
     /**
+     * ✅ ADDED: Bulk approve submissions
+     */
+    public function bulkApprove(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user->hasModeratorPrivileges()) {
+            abort(403, 'Unauthorized access');
+        }
+
+        $request->validate([
+            'submission_ids' => ['required', 'array'],
+            'submission_ids.*' => ['exists:content_submissions,id'],
+            'publish' => ['boolean']
+        ]);
+
+        $approved = 0;
+        $errors = [];
+        $shouldPublish = $request->get('publish', false);
+
+        foreach ($request->submission_ids as $submissionId) {
+            $submission = ContentSubmission::find($submissionId);
+            
+            if (!$submission) {
+                $errors[] = "Submission ID {$submissionId} not found.";
+                continue;
+            }
+            
+            if (!$submission->canBeApproved()) {
+                $errors[] = "Submission '{$submission->title}' cannot be approved.";
+                continue;
+            }
+            
+            try {
+                $submission->approve($user->id, $shouldPublish);
+                $approved++;
+            } catch (\Exception $e) {
+                $errors[] = "Failed to approve '{$submission->title}': " . $e->getMessage();
+            }
+        }
+
+        $message = "Berhasil menyetujui {$approved} konten.";
+        if ($shouldPublish) {
+            $message .= " Konten telah dipublikasikan.";
+        }
+        
+        if (!empty($errors)) {
+            $message .= " Terdapat " . count($errors) . " error.";
+        }
+
+        return back()->with('success', $message);
+    }
+
+    /**
+     * ✅ ADDED: Bulk reject submissions
+     */
+    public function bulkReject(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user->hasModeratorPrivileges()) {
+            abort(403, 'Unauthorized access');
+        }
+
+        $request->validate([
+            'submission_ids' => ['required', 'array'],
+            'submission_ids.*' => ['exists:content_submissions,id'],
+            'rejection_reason' => ['required', 'string', 'min:10', 'max:500']
+        ]);
+
+        $rejected = 0;
+        $errors = [];
+
+        foreach ($request->submission_ids as $submissionId) {
+            $submission = ContentSubmission::find($submissionId);
+            
+            if (!$submission) {
+                $errors[] = "Submission ID {$submissionId} not found.";
+                continue;
+            }
+            
+            if (!$submission->canBeRejected()) {
+                $errors[] = "Submission '{$submission->title}' cannot be rejected.";
+                continue;
+            }
+            
+            try {
+                $submission->reject($request->rejection_reason, $user->id);
+                $rejected++;
+            } catch (\Exception $e) {
+                $errors[] = "Failed to reject '{$submission->title}': " . $e->getMessage();
+            }
+        }
+
+        $message = "Berhasil menolak {$rejected} konten.";
+        
+        if (!empty($errors)) {
+            $message .= " Terdapat " . count($errors) . " error.";
+        }
+
+        return back()->with('success', $message);
+    }
+
+    // ===== FILE HANDLING METHODS =====
+
+    /**
      * Handle file upload
      */
     private function handleFileUpload($file, $folder = 'submissions')
@@ -439,7 +619,7 @@ class ContentSubmissionController extends Controller
             // Generate unique filename
             $originalName = $file->getClientOriginalName();
             $extension = $file->getClientOriginalExtension();
-            $filename = time() . '_' . uniqid() . '.' . $extension;
+            $filename = Str::slug(pathinfo($originalName, PATHINFO_FILENAME)) . '_' . time() . '.' . $extension;
 
             // Store file
             $path = $file->storeAs($folder, $filename, 'public');
@@ -468,21 +648,60 @@ class ContentSubmissionController extends Controller
     }
 
     /**
-     * Categorize file types
+     * ✅ ENHANCED: Categorize file types with better detection
      */
     private function getFileTypeCategory($mimeType)
     {
+        // Image types
         if (str_starts_with($mimeType, 'image/')) {
             return 'image';
-        } elseif ($mimeType === 'application/pdf') {
-            return 'pdf';
-        } elseif (str_contains($mimeType, 'word') || str_contains($mimeType, 'document')) {
-            return 'document';
-        } elseif (str_contains($mimeType, 'excel') || str_contains($mimeType, 'spreadsheet')) {
-            return 'spreadsheet';
-        } else {
-            return 'file';
         }
+        
+        // PDF
+        if ($mimeType === 'application/pdf') {
+            return 'pdf';
+        }
+        
+        // Document types
+        $documentTypes = [
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.oasis.opendocument.text'
+        ];
+        if (in_array($mimeType, $documentTypes)) {
+            return 'document';
+        }
+        
+        // Spreadsheet types
+        $spreadsheetTypes = [
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.oasis.opendocument.spreadsheet'
+        ];
+        if (in_array($mimeType, $spreadsheetTypes)) {
+            return 'spreadsheet';
+        }
+        
+        // Presentation types
+        $presentationTypes = [
+            'application/vnd.ms-powerpoint',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        ];
+        if (in_array($mimeType, $presentationTypes)) {
+            return 'presentation';
+        }
+        
+        // Archive types
+        $archiveTypes = [
+            'application/zip',
+            'application/x-rar-compressed',
+            'application/x-7z-compressed'
+        ];
+        if (in_array($mimeType, $archiveTypes)) {
+            return 'archive';
+        }
+        
+        return 'file';
     }
 
     /**
@@ -499,14 +718,14 @@ class ContentSubmissionController extends Controller
             abort(404, 'File not found');
         }
 
-        $filePath = storage_path('app/public/' . $submission->attachment_path);
-        
-        if (!file_exists($filePath)) {
+        if (!Storage::disk('public')->exists($submission->attachment_path)) {
             abort(404, 'File not found');
         }
 
-        return response()->download($filePath, $submission->attachment_name);
+        return Storage::disk('public')->download($submission->attachment_path, $submission->attachment_name);
     }
+
+    // ===== API METHODS =====
 
     /**
      * Get submission statistics for API
@@ -530,5 +749,259 @@ class ContentSubmissionController extends Controller
                 'user_stats' => $stats,
             ]);
         }
+    }
+
+    /**
+     * ✅ ADDED: Get submission trends for dashboard
+     */
+    public function getTrends(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user->hasModeratorPrivileges()) {
+            abort(403, 'Unauthorized access');
+        }
+
+        $days = $request->get('days', 30);
+        $trends = ContentSubmission::getSubmissionTrends($days);
+        
+        return response()->json(['trends' => $trends]);
+    }
+
+    /**
+     * ✅ ADDED: Search submissions API
+     */
+    public function search(Request $request)
+    {
+        $request->validate([
+            'q' => ['required', 'string', 'min:2'],
+            'status' => ['nullable', 'in:pending_payment,pending_approval,approved,rejected,published'],
+            'category_id' => ['nullable', 'exists:submission_categories,id'],
+            'limit' => ['nullable', 'integer', 'min:1', 'max:50']
+        ]);
+
+        $user = Auth::user();
+        $query = ContentSubmission::search($request->q)
+                                  ->with(['category', 'user', 'payment']);
+
+        // If not admin/moderator, only show user's submissions
+        if (!$user->hasModeratorPrivileges()) {
+            $query->where('user_id', $user->id);
+        }
+
+        // Apply filters
+        if ($request->status) {
+            $query->where('status', $request->status);
+        }
+
+        if ($request->category_id) {
+            $query->where('category_id', $request->category_id);
+        }
+
+        $limit = $request->get('limit', 10);
+        $submissions = $query->limit($limit)->get();
+
+        return response()->json([
+            'submissions' => $submissions,
+            'count' => $submissions->count()
+        ]);
+    }
+
+    /**
+     * ✅ ADDED: Export submissions
+     */
+    public function export(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user->hasModeratorPrivileges()) {
+            abort(403, 'Unauthorized access');
+        }
+
+        $request->validate([
+            'format' => ['required', 'in:csv,json'],
+            'status' => ['nullable', 'string'],
+            'category_id' => ['nullable', 'exists:submission_categories,id'],
+            'date_from' => ['nullable', 'date'],
+            'date_to' => ['nullable', 'date']
+        ]);
+
+        $query = ContentSubmission::with(['user', 'category', 'payment', 'approvedBy']);
+
+        // Apply filters
+        if ($request->status) {
+            $query->where('status', $request->status);
+        }
+
+        if ($request->category_id) {
+            $query->where('category_id', $request->category_id);
+        }
+
+        if ($request->date_from) {
+            $query->whereDate('created_at', '>=', $request->date_from);
+        }
+
+        if ($request->date_to) {
+            $query->whereDate('created_at', '<=', $request->date_to);
+        }
+
+        $submissions = $query->orderBy('created_at', 'desc')->get();
+
+        if ($request->format === 'csv') {
+            return $this->exportToCsv($submissions);
+        } else {
+            return $this->exportToJson($submissions);
+        }
+    }
+
+    /**
+     * ✅ ADDED: Export to CSV
+     */
+    private function exportToCsv($submissions)
+    {
+        $filename = 'submissions_' . now()->format('Y-m-d_H-i-s') . '.csv';
+        
+        $headers = [
+            'Content-Type' => 'text/csv',
+            'Content-Disposition' => "attachment; filename=\"{$filename}\"",
+        ];
+
+        $callback = function() use ($submissions) {
+            $file = fopen('php://output', 'w');
+            
+            // CSV headers
+            fputcsv($file, [
+                'ID', 'Title', 'Category', 'User', 'Status', 'Amount', 
+                'Created At', 'Submitted At', 'Approved At', 'Approved By'
+            ]);
+
+            // CSV data
+            foreach ($submissions as $submission) {
+                fputcsv($file, [
+                    $submission->id,
+                    $submission->title,
+                    $submission->category->name ?? 'Unknown',
+                    $submission->user->full_name ?? 'Unknown',
+                    $submission->status_display,
+                    $submission->category->formatted_price ?? 'Free',
+                    $submission->created_at->format('Y-m-d H:i:s'),
+                    $submission->submitted_at?->format('Y-m-d H:i:s') ?? '',
+                    $submission->approved_at?->format('Y-m-d H:i:s') ?? '',
+                    $submission->approvedBy->full_name ?? ''
+                ]);
+            }
+
+            fclose($file);
+        };
+
+        return response()->stream($callback, 200, $headers);
+    }
+
+    /**
+     * ✅ ADDED: Export to JSON
+     */
+    private function exportToJson($submissions)
+    {
+        $filename = 'submissions_' . now()->format('Y-m-d_H-i-s') . '.json';
+        
+        $data = $submissions->map(function($submission) {
+            return [
+                'id' => $submission->id,
+                'title' => $submission->title,
+                'description' => $submission->description,
+                'category' => [
+                    'id' => $submission->category->id ?? null,
+                    'name' => $submission->category->name ?? 'Unknown',
+                    'price' => $submission->category->price ?? 0
+                ],
+                'user' => [
+                    'id' => $submission->user->id ?? null,
+                    'name' => $submission->user->full_name ?? 'Unknown',
+                    'email' => $submission->user->email ?? 'Unknown'
+                ],
+                'status' => $submission->status,
+                'status_display' => $submission->status_display,
+                'has_attachment' => $submission->hasAttachment(),
+                'payment' => $submission->payment ? [
+                    'id' => $submission->payment->id,
+                    'amount' => $submission->payment->amount,
+                    'status' => $submission->payment->status,
+                    'method' => $submission->payment->payment_method
+                ] : null,
+                'created_at' => $submission->created_at->toISOString(),
+                'submitted_at' => $submission->submitted_at?->toISOString(),
+                'approved_at' => $submission->approved_at?->toISOString(),
+                'approved_by' => $submission->approvedBy->full_name ?? null
+            ];
+        });
+
+        return response()->json(['submissions' => $data])
+                        ->header('Content-Disposition', "attachment; filename=\"{$filename}\"");
+    }
+
+    /**
+     * ✅ ADDED: Get category statistics for admin
+     */
+    public function getCategoryStats()
+    {
+        $user = Auth::user();
+        
+        if (!$user->hasModeratorPrivileges()) {
+            abort(403, 'Unauthorized access');
+        }
+
+        $categoryStats = SubmissionCategory::getActiveCategories()
+                                          ->map(function($category) {
+                                              return [
+                                                  'id' => $category->id,
+                                                  'name' => $category->name,
+                                                  'submissions_count' => $category->submissions()->count(),
+                                                  'pending_count' => $category->submissions()->pending()->count(),
+                                                  'approved_count' => $category->submissions()->approved()->count(),
+                                                  'total_revenue' => $category->total_revenue,
+                                                  'approval_rate' => $category->getApprovalRate()
+                                              ];
+                                          });
+
+        return response()->json(['category_stats' => $categoryStats]);
+    }
+
+    /**
+     * ✅ ADDED: Validate submission before creating
+     */
+    public function validateSubmission(Request $request)
+    {
+        $request->validate([
+            'category_id' => ['required', 'exists:submission_categories,id'],
+            'title' => ['required', 'string', 'max:255'],
+            'description' => ['required', 'string', 'min:50', 'max:5000']
+        ]);
+
+        $category = SubmissionCategory::findOrFail($request->category_id);
+        
+        $validation = [
+            'valid' => true,
+            'errors' => [],
+            'category' => [
+                'name' => $category->name,
+                'price' => $category->formatted_price,
+                'allowed_file_types' => $category->allowed_file_types_string,
+                'max_file_size' => $category->formatted_max_file_size
+            ]
+        ];
+
+        // Check if category accepts new submissions
+        if (!$category->canAcceptNewSubmissions()) {
+            $validation['valid'] = false;
+            $validation['errors'][] = 'Kategori ini sedang tidak menerima submission baru.';
+        }
+
+        // Check user verification
+        if (!Auth::user()->canCreateSubmissions()) {
+            $validation['valid'] = false;
+            $validation['errors'][] = 'Akun Anda harus diverifikasi terlebih dahulu.';
+        }
+
+        return response()->json($validation);
     }
 }

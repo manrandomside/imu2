@@ -107,7 +107,7 @@ Route::middleware(['auth'])->group(function () {
 });
 
 // ===================================================================
-// ✅ NEW: CONTENT SUBMISSION ROUTES (User Routes)
+// ✅ CONTENT SUBMISSION ROUTES (User Routes)
 // ===================================================================
 
 Route::middleware(['auth'])->group(function () {
@@ -127,7 +127,7 @@ Route::middleware(['auth'])->group(function () {
 });
 
 // ===================================================================
-// ✅ NEW: PAYMENT ROUTES (User Routes)
+// ✅ PAYMENT ROUTES (User Routes)
 // ===================================================================
 
 Route::middleware(['auth'])->group(function () {
@@ -139,10 +139,13 @@ Route::middleware(['auth'])->group(function () {
     Route::get('/payments/{payment}/edit', [PaymentController::class, 'edit'])->name('payments.edit');
     Route::put('/payments/{payment}', [PaymentController::class, 'update'])->name('payments.update');
     Route::get('/payments/{payment}/download-proof', [PaymentController::class, 'downloadProof'])->name('payments.download_proof');
+    
+    // ✅ ADDED: User payment history & utilities
+    Route::get('/payments/user/history', [PaymentController::class, 'userPayments'])->name('payments.user_history');
 });
 
 // ===================================================================
-// ✅ NEW: ADMIN ROUTES FOR CONTENT SUBMISSION & PAYMENT MANAGEMENT
+// ✅ ADMIN ROUTES FOR CONTENT SUBMISSION & PAYMENT MANAGEMENT
 // ===================================================================
 
 Route::middleware(['auth'])->group(function () {
@@ -151,6 +154,7 @@ Route::middleware(['auth'])->group(function () {
     Route::get('/admin/submissions', [ContentSubmissionController::class, 'adminIndex'])->name('admin.submissions.index');
     Route::post('/admin/submissions/{submission}/approve', [ContentSubmissionController::class, 'approve'])->name('admin.submissions.approve');
     Route::post('/admin/submissions/{submission}/reject', [ContentSubmissionController::class, 'reject'])->name('admin.submissions.reject');
+    // ✅ ADDED: Missing publish route (method exists in controller but route was missing)
     Route::post('/admin/submissions/{submission}/publish', [ContentSubmissionController::class, 'publish'])->name('admin.submissions.publish');
     
     // ✅ ADMIN PAYMENT MANAGEMENT  
@@ -159,8 +163,12 @@ Route::middleware(['auth'])->group(function () {
     Route::post('/admin/payments/{payment}/reject', [PaymentController::class, 'reject'])->name('admin.payments.reject');
     Route::post('/admin/payments/bulk-action', [PaymentController::class, 'bulkAction'])->name('admin.payments.bulk_action');
     
+    // ✅ ADDED: Export & Analytics Routes
+    Route::get('/admin/payments/export', [PaymentController::class, 'exportCsv'])->name('admin.payments.export');
+    
     // ✅ ADMIN API ROUTES
     Route::get('/api/admin/payments/stats', [PaymentController::class, 'getStats'])->name('api.admin.payments.stats');
+    Route::get('/api/admin/payments/stats-by-date', [PaymentController::class, 'getStatsByDateRange'])->name('api.admin.payments.stats_by_date');
 });
 
 // ===================================================================
@@ -217,6 +225,81 @@ Route::middleware(['auth'])->group(function () {
 });
 
 // ===================================================================
+// ✅ API ROUTES for Frontend Integration
+// ===================================================================
+
+Route::prefix('api')->middleware(['auth'])->group(function () {
+    
+    // ✅ User Role Information
+    Route::get('/user/role-info', function() {
+        $user = Auth::user();
+        return response()->json([
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->full_name,
+                'role' => $user->role,
+                'permissions' => [
+                    'is_admin' => $user->isAdmin(),
+                    'is_moderator' => $user->isModerator(),
+                    'can_moderate' => $user->hasModeratorPrivileges(),
+                    'can_create_submissions' => $user->canCreateSubmissions(),
+                    'can_manage_submissions' => $user->canManageSubmissions(),
+                    'can_manage_payments' => $user->canManagePayments(),
+                ]
+            ]
+        ]);
+    })->name('api.user.role_info');
+    
+    // ✅ Communities with Permission Info
+    Route::get('/communities/with-permissions', function() {
+        $user = Auth::user();
+        $communities = App\Models\ChatGroup::where('is_approved', true)
+                                           ->with(['creator:id,full_name,role', 'moderator:id,full_name,role'])
+                                           ->get()
+                                           ->map(function($community) use ($user) {
+                                               return [
+                                                   'id' => $community->id,
+                                                   'name' => $community->name,
+                                                   'description' => $community->description,
+                                                   'creator' => $community->creator,
+                                                   'moderator' => $community->moderator,
+                                                   'permissions' => [
+                                                       'can_read' => true,
+                                                       'can_post' => $user->hasModeratorPrivileges() || 
+                                                                   $community->creator_id === $user->id ||
+                                                                   $community->moderator_id === $user->id,
+                                                       'can_moderate' => $user->hasModeratorPrivileges() || 
+                                                                       $community->creator_id === $user->id ||
+                                                                       $community->moderator_id === $user->id,
+                                                   ]
+                                               ];
+                                           });
+        
+        return response()->json(['communities' => $communities]);
+    })->name('api.communities.with_permissions');
+    
+    // ✅ ADDED: Payment Methods API
+    Route::get('/payment-methods', [PaymentController::class, 'getPaymentMethods'])->name('api.payment_methods');
+    
+    // ✅ ADDED: Submission Categories API
+    Route::get('/submission-categories', function() {
+        $categories = App\Models\SubmissionCategory::getActiveCategories();
+        return response()->json(['categories' => $categories]);
+    })->name('api.submission_categories');
+    
+    // ✅ ADDED: User Statistics API
+    Route::get('/user/stats', function() {
+        $user = Auth::user();
+        $stats = [
+            'submissions' => $user->getSubmissionStats(),
+            'payments' => $user->getPaymentStats(),
+            'notifications' => App\Models\Notification::getStatsForUser($user->id),
+        ];
+        return response()->json(['stats' => $stats]);
+    })->name('api.user.stats');
+});
+
+// ===================================================================
 // ✅ ENHANCED DEBUG ROUTES (Development Only) 
 // ===================================================================
 
@@ -235,8 +318,10 @@ Route::middleware(['auth'])->group(function () {
                                         'id' => $user->id,
                                         'name' => $user->full_name,
                                         'role' => $user->role,
-                                        'is_admin' => $user->role === 'admin',
-                                        'is_moderator' => $user->role === 'moderator',
+                                        'is_admin' => $user->isAdmin(),
+                                        'is_moderator' => $user->isModerator(),
+                                        'has_moderator_privileges' => $user->hasModeratorPrivileges(),
+                                        'can_create_submissions' => $user->canCreateSubmissions(),
                                         'moderated_communities' => $user->moderatedCommunities ? $user->moderatedCommunities->pluck('name') : [],
                                         'created_communities' => $user->createdCommunities ? $user->createdCommunities->pluck('name') : [],
                                     ];
@@ -288,12 +373,66 @@ Route::middleware(['auth'])->group(function () {
                 ] : null
             ],
             'permissions' => [
-                'is_admin' => $currentUser->role === 'admin',
+                'is_admin' => $currentUser->isAdmin(),
                 'is_creator' => $group->creator_id === $currentUser->id,
-                'is_moderator' => $group->moderator_id === $currentUser->id
+                'is_moderator' => $group->moderator_id === $currentUser->id,
+                'has_moderator_privileges' => $currentUser->hasModeratorPrivileges(),
             ]
         ], 200, [], JSON_PRETTY_PRINT);
     })->name('debug.community_permissions');
+    
+    // ✅ SUBMISSION SYSTEM DEBUGGING
+    Route::get('/debug/submission-system', function() {
+        if (!app()->environment('local')) {
+            abort(403, 'Only available in local environment');
+        }
+        
+        try {
+            $stats = [
+                'categories' => [
+                    'total' => App\Models\SubmissionCategory::count(),
+                    'active' => App\Models\SubmissionCategory::where('is_active', true)->count(),
+                    'list' => App\Models\SubmissionCategory::select('id', 'name', 'slug', 'price', 'is_active')->get(),
+                ],
+                'submissions' => [
+                    'total' => App\Models\ContentSubmission::count(),
+                    'by_status' => App\Models\ContentSubmission::selectRaw('status, count(*) as count')
+                                                              ->groupBy('status')
+                                                              ->get(),
+                ],
+                'payments' => [
+                    'total' => App\Models\Payment::count(),
+                    'by_status' => App\Models\Payment::selectRaw('status, count(*) as count')
+                                                   ->groupBy('status')
+                                                   ->get(),
+                    'total_revenue' => App\Models\Payment::where('status', 'confirmed')->sum('amount'),
+                ],
+                'notifications' => [
+                    'total' => App\Models\Notification::count(),
+                    'submission_related' => App\Models\Notification::submissionRelated()->count(),
+                    'payment_related' => App\Models\Notification::paymentRelated()->count(),
+                ],
+            ];
+            
+            return response()->json([
+                'status' => 'success',
+                'submission_system_stats' => $stats,
+                'routes_available' => [
+                    'submissions' => route('submissions.index'),
+                    'submissions_create' => route('submissions.create'),
+                    'admin_submissions' => route('admin.submissions.index'),
+                    'admin_payments' => route('admin.payments.index'),
+                ]
+            ], 200, [], JSON_PRETTY_PRINT);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => $e->getMessage(),
+                'suggestion' => 'Run migrations: php artisan migrate'
+            ], 500, [], JSON_PRETTY_PRINT);
+        }
+    })->name('debug.submission_system');
     
     // ✅ MIGRATION STATUS CHECK
     Route::get('/debug/migration-status', function() {
@@ -302,6 +441,14 @@ Route::middleware(['auth'])->group(function () {
         }
         
         try {
+            // Check if tables exist
+            $tables = [
+                'submission_categories' => Schema::hasTable('submission_categories'),
+                'content_submissions' => Schema::hasTable('content_submissions'),
+                'payments' => Schema::hasTable('payments'),
+                'notifications' => Schema::hasTable('notifications'),
+            ];
+            
             // Check moderator users
             $moderators = App\Models\User::where('role', 'moderator')->get();
             
@@ -311,6 +458,7 @@ Route::middleware(['auth'])->group(function () {
                                                        ->get();
             
             return response()->json([
+                'tables_exist' => $tables,
                 'moderator_count' => $moderators->count(),
                 'moderators' => $moderators->map(function($user) {
                     return [
@@ -464,6 +612,8 @@ Route::middleware(['auth'])->group(function () {
             'full_name' => $user->full_name,
             'role' => $user->role,
             'match_categories' => $user->match_categories,
+            'can_create_submissions' => $user->canCreateSubmissions(),
+            'has_moderator_privileges' => $user->hasModeratorPrivileges(),
         ], 200, [], JSON_PRETTY_PRINT);
     })->name('debug.user');
     
@@ -487,7 +637,7 @@ Route::middleware(['auth'])->group(function () {
 });
 
 // ===================================================================
-// ✅ NEW: SUBMISSION & PAYMENT TEST DATA SEEDING (Development Only)
+// ✅ SUBMISSION & PAYMENT TEST DATA SEEDING (Development Only)
 // ===================================================================
 
 Route::get('/debug/seed-submission-data', function () {
@@ -510,6 +660,22 @@ Route::get('/debug/seed-submission-data', function () {
                 'name' => 'Lowongan Kerja',
                 'slug' => 'lowongan-kerja',
                 'description' => 'Submit lowongan kerja dan magang',
+                'price' => 5000.00,
+                'allowed_file_types' => json_encode(['jpg', 'jpeg', 'png', 'pdf', 'doc', 'docx']),
+                'max_file_size' => 10485760
+            ],
+            [
+                'name' => 'Seminar & Workshop',
+                'slug' => 'seminar-workshop',
+                'description' => 'Submit informasi seminar dan workshop',
+                'price' => 5000.00,
+                'allowed_file_types' => json_encode(['jpg', 'jpeg', 'png', 'pdf', 'doc', 'docx']),
+                'max_file_size' => 10485760
+            ],
+            [
+                'name' => 'Event & Acara',
+                'slug' => 'event-acara',
+                'description' => 'Submit informasi event dan acara kampus',
                 'price' => 5000.00,
                 'allowed_file_types' => json_encode(['jpg', 'jpeg', 'png', 'pdf', 'doc', 'docx']),
                 'max_file_size' => 10485760
@@ -556,6 +722,10 @@ Route::get('/debug/seed-submission-data', function () {
         ], 500, [], JSON_PRETTY_PRINT);
     }
 });
+
+// ===================================================================
+// ✅ ADDITIONAL TEST ROUTES (Development Only)
+// ===================================================================
 
 // TEST DATA SEEDING ROUTES (Development Only)
 Route::get('/debug/seed-test-data', function () {
@@ -736,11 +906,14 @@ Route::get('/debug/test-routes', function() {
         ],
         'Payment Routes' => [
             'GET /admin/payments' => route('admin.payments.index'),
+            'GET /payments/user/history' => route('payments.user_history'),
+            'GET /admin/payments/export' => route('admin.payments.export'),
         ],
         'Moderator Routes' => [
             'GET /moderator/dashboard' => route('moderator.dashboard'),
             'GET /debug/user-roles' => route('debug.user_roles'),
             'GET /debug/migration-status' => route('debug.migration_status'),
+            'GET /debug/submission-system' => route('debug.submission_system'),
         ],
         'Debug Routes' => [
             'GET /debug/match-categories' => route('debug.match_categories'),
@@ -755,56 +928,4 @@ Route::get('/debug/test-routes', function() {
         'available_routes' => $routes,
         'note' => 'These routes are available for testing all features including content submission system'
     ], 200, [], JSON_PRETTY_PRINT);
-});
-
-// ===================================================================
-// ✅ API ROUTES for Frontend Integration
-// ===================================================================
-
-Route::prefix('api')->middleware(['auth'])->group(function () {
-    
-    // ✅ User Role Information
-    Route::get('/user/role-info', function() {
-        $user = Auth::user();
-        return response()->json([
-            'user' => [
-                'id' => $user->id,
-                'name' => $user->full_name,
-                'role' => $user->role,
-                'permissions' => [
-                    'is_admin' => $user->role === 'admin',
-                    'is_moderator' => $user->role === 'moderator',
-                    'can_moderate' => in_array($user->role, ['admin', 'moderator']),
-                ]
-            ]
-        ]);
-    })->name('api.user.role_info');
-    
-    // ✅ Communities with Permission Info
-    Route::get('/communities/with-permissions', function() {
-        $user = Auth::user();
-        $communities = App\Models\ChatGroup::where('is_approved', true)
-                                           ->with(['creator:id,full_name,role', 'moderator:id,full_name,role'])
-                                           ->get()
-                                           ->map(function($community) use ($user) {
-                                               return [
-                                                   'id' => $community->id,
-                                                   'name' => $community->name,
-                                                   'description' => $community->description,
-                                                   'creator' => $community->creator,
-                                                   'moderator' => $community->moderator,
-                                                   'permissions' => [
-                                                       'can_read' => true,
-                                                       'can_post' => $user->role === 'admin' || 
-                                                                   $community->creator_id === $user->id ||
-                                                                   $community->moderator_id === $user->id,
-                                                       'can_moderate' => $user->role === 'admin' || 
-                                                                       $community->creator_id === $user->id ||
-                                                                       $community->moderator_id === $user->id,
-                                                   ]
-                                               ];
-                                           });
-        
-        return response()->json(['communities' => $communities]);
-    })->name('api.communities.with_permissions');
 });
