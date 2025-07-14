@@ -9,6 +9,7 @@ use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\ModeratorController;
 use App\Http\Controllers\ContentSubmissionController;
 use App\Http\Controllers\PaymentController;
+use App\Http\Controllers\Admin\AlumniApprovalController;
 
 // Rute default, bisa diarahkan ke halaman login atau register nantinya
 Route::get('/', function () {
@@ -222,6 +223,28 @@ Route::middleware(['auth'])->group(function () {
     Route::get('/community/search', [CommunityController::class, 'searchMessages'])->name('community.search_messages');
     Route::get('/community/trending', [CommunityController::class, 'getTrendingMessages'])->name('community.trending_messages');
     Route::post('/community/report', [CommunityController::class, 'reportMessage'])->name('community.report_message');
+});
+
+
+// Routes untuk Admin Alumni Approval
+Route::middleware(['auth'])->prefix('admin')->name('admin.')->group(function () {
+    
+    // Alumni Approval Routes
+    Route::get('/alumni-approval', [AlumniApprovalController::class, 'index'])
+        ->name('alumni-approval.index');
+    
+    Route::get('/alumni-approval/{id}', [AlumniApprovalController::class, 'show'])
+        ->name('alumni-approval.show');
+    
+    Route::post('/alumni-approval/{id}/approve', [AlumniApprovalController::class, 'approve'])
+        ->name('alumni-approval.approve');
+    
+    Route::post('/alumni-approval/{id}/reject', [AlumniApprovalController::class, 'reject'])
+        ->name('alumni-approval.reject');
+    
+    Route::get('/alumni-approval/{id}/download', [AlumniApprovalController::class, 'downloadDocument'])
+        ->name('alumni-approval.download');
+    
 });
 
 // ===================================================================

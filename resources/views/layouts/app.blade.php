@@ -267,6 +267,39 @@
                 <a href="{{ route('find.people') }}" class="hover:text-gray-200">Find</a>
                 <a href="{{ route('community') }}" class="hover:text-gray-200">Community</a>
                 <a href="{{ route('submissions.index') }}" class="hover:text-gray-200">Submit Konten</a>
+                
+                {{-- ✅ OPTIMIZED: Alumni Approval Link dengan Query Aman --}}
+                @auth
+                    @if(auth()->user()->isAdmin())
+                        <a href="{{ route('admin.alumni-approval.index') }}" class="hover:text-gray-200 relative">
+                            Alumni Approval
+                            @php
+                                try {
+                                    // Query optimized dengan limit untuk safety
+                                    $pendingCount = \App\Models\User::where('role', 'alumni')
+                                        ->where('is_verified', 0)
+                                        ->limit(10) // Limit max 10 untuk safety
+                                        ->count();
+                                    
+                                    // Log untuk debugging (opsional)
+                                    if (config('app.debug')) {
+                                        \Log::info("Alumni pending count: {$pendingCount}");
+                                    }
+                                } catch (\Exception $e) {
+                                    // Jika error, set ke 0 dan log error
+                                    $pendingCount = 0;
+                                    \Log::error('Error counting pending alumni: ' . $e->getMessage());
+                                }
+                            @endphp
+                            @if($pendingCount > 0)
+                                <span class="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center font-bold">
+                                    {{ $pendingCount > 9 ? '9+' : $pendingCount }}
+                                </span>
+                            @endif
+                        </a>
+                    @endif
+                @endauth
+                
                 <a href="{{ route('user.profile') }}" class="hover:text-gray-200">Profile</a>
                 
                 {{-- ✅ NOTIFICATION BELL - NEW! --}}
