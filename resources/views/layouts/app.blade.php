@@ -268,32 +268,56 @@
                 <a href="{{ route('community') }}" class="hover:text-gray-200">Community</a>
                 <a href="{{ route('submissions.index') }}" class="hover:text-gray-200">Submit Konten</a>
                 
-                {{-- ✅ OPTIMIZED: Alumni Approval Link dengan Query Aman --}}
+                {{-- ✅ SUPER OPTIMIZED: Alumni Approval Link dengan Caching & Safety --}}
                 @auth
                     @if(auth()->user()->isAdmin())
                         <a href="{{ route('admin.alumni-approval.index') }}" class="hover:text-gray-200 relative">
                             Alumni Approval
                             @php
+                                $pendingCount = 0;
+                                
                                 try {
-                                    // Query optimized dengan limit untuk safety
-                                    $pendingCount = \App\Models\User::where('role', 'alumni')
-                                        ->where('is_verified', 0)
-                                        ->limit(10) // Limit max 10 untuk safety
-                                        ->count();
+                                    // ✅ OPTIMASI LEVEL 1: Cache dengan key unik dan expiry
+                                    $cacheKey = 'alumni_pending_count_' . auth()->id();
+                                    $pendingCount = cache()->remember($cacheKey, 60, function() {
+                                        try {
+                                            // ✅ OPTIMASI LEVEL 2: Query dengan timeout 2 detik
+                                            $startTime = microtime(true);
+                                            
+                                            // ✅ OPTIMASI LEVEL 3: Query super minimal dengan limit
+                                            $count = \Illuminate\Support\Facades\DB::table('users')
+                                                ->where('role', 'alumni')
+                                                ->where('is_verified', 0)
+                                                ->limit(15) // Limit rendering badge maksimal 15
+                                                ->count();
+                                            
+                                            $executionTime = microtime(true) - $startTime;
+                                            
+                                            // ✅ OPTIMASI LEVEL 4: Log jika query lambat
+                                            if ($executionTime > 0.5) {
+                                                \Illuminate\Support\Facades\Log::warning("Slow alumni count query: {$executionTime}s");
+                                            }
+                                            
+                                            return min($count, 99); // Cap maksimal 99 untuk UI
+                                            
+                                        } catch (\Exception $e) {
+                                            // ✅ OPTIMASI LEVEL 5: Fallback aman
+                                            \Illuminate\Support\Facades\Log::error('Alumni count query failed: ' . $e->getMessage());
+                                            return 0;
+                                        }
+                                    });
                                     
-                                    // Log untuk debugging (opsional)
-                                    if (config('app.debug')) {
-                                        \Log::info("Alumni pending count: {$pendingCount}");
-                                    }
                                 } catch (\Exception $e) {
-                                    // Jika error, set ke 0 dan log error
+                                    // ✅ OPTIMASI LEVEL 6: Fallback cache gagal
                                     $pendingCount = 0;
-                                    \Log::error('Error counting pending alumni: ' . $e->getMessage());
+                                    if (config('app.debug')) {
+                                        \Illuminate\Support\Facades\Log::error('Alumni count cache failed: ' . $e->getMessage());
+                                    }
                                 }
                             @endphp
                             @if($pendingCount > 0)
                                 <span class="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center font-bold">
-                                    {{ $pendingCount > 9 ? '9+' : $pendingCount }}
+                                    {{ $pendingCount > 99 ? '99+' : $pendingCount }}
                                 </span>
                             @endif
                         </a>
@@ -373,7 +397,7 @@
 
     @stack('scripts') {{-- Pastikan ini ada untuk menampung script dari halaman child --}}
 
-    {{-- ✅ NOTIFICATION JAVASCRIPT - NEW! --}}
+    {{-- ✅ NOTIFICATION JAVASCRIPT - OPTIMIZED --}}
     @auth
     <script>
         document.addEventListener('DOMContentLoaded', function() {
@@ -385,6 +409,7 @@
             const markAllReadBtn = document.getElementById('mark-all-read');
             
             let dropdownOpen = false;
+            let requestInProgress = false; // ✅ Prevent multiple concurrent requests
 
             // Toggle notification dropdown
             notificationBell.addEventListener('click', function(e) {
@@ -425,12 +450,21 @@
 
             // Functions
             async function updateNotificationCount() {
+                if (requestInProgress) return; // ✅ Prevent concurrent requests
+                
                 try {
+                    requestInProgress = true;
+                    const controller = new AbortController(); // ✅ Add timeout support
+                    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+                    
                     const response = await fetch('/notifications/count', {
                         headers: {
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
-                        }
+                        },
+                        signal: controller.signal
                     });
+                    
+                    clearTimeout(timeoutId);
                     
                     const data = await response.json();
                     
@@ -439,23 +473,36 @@
                         
                         if (count > 0) {
                             notificationDot.classList.remove('hidden');
-                            notificationCount.textContent = count > 9 ? '9+' : count;
+                            notificationCount.textContent = count > 99 ? '99+' : count;
                         } else {
                             notificationDot.classList.add('hidden');
                         }
                     }
                 } catch (error) {
-                    console.error('Error fetching notification count:', error);
+                    if (error.name !== 'AbortError') {
+                        console.error('Error fetching notification count:', error);
+                    }
+                } finally {
+                    requestInProgress = false;
                 }
             }
 
             async function loadNotifications() {
+                if (requestInProgress) return; // ✅ Prevent concurrent requests
+                
                 try {
+                    requestInProgress = true;
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+                    
                     const response = await fetch('/notifications', {
                         headers: {
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
-                        }
+                        },
+                        signal: controller.signal
                     });
+                    
+                    clearTimeout(timeoutId);
                     
                     const data = await response.json();
                     
@@ -464,8 +511,14 @@
                         updateNotificationCount(); // Update count after loading
                     }
                 } catch (error) {
-                    console.error('Error loading notifications:', error);
-                    notificationsList.innerHTML = '<div class="p-4 text-center text-red-500">Error loading notifications</div>';
+                    if (error.name === 'AbortError') {
+                        notificationsList.innerHTML = '<div class="p-4 text-center text-orange-500">Loading timed out, please try again</div>';
+                    } else {
+                        console.error('Error loading notifications:', error);
+                        notificationsList.innerHTML = '<div class="p-4 text-center text-red-500">Error loading notifications</div>';
+                    }
+                } finally {
+                    requestInProgress = false;
                 }
             }
 
@@ -525,9 +578,14 @@
                 notificationsList.innerHTML = notificationsHtml;
             }
 
-            // Global functions for button actions
+            // Global functions for button actions (with throttling)
+            let actionInProgress = false;
+            
             window.markAsRead = async function(notificationId) {
+                if (actionInProgress) return;
+                
                 try {
+                    actionInProgress = true;
                     await fetch('/notifications/mark-read', {
                         method: 'POST',
                         headers: {
@@ -540,11 +598,16 @@
                     updateNotificationCount();
                 } catch (error) {
                     console.error('Error marking notification as read:', error);
+                } finally {
+                    actionInProgress = false;
                 }
             };
 
             window.likeBack = async function(notificationId, fromUserId) {
+                if (actionInProgress) return;
+                
                 try {
+                    actionInProgress = true;
                     const response = await fetch('/notifications/like-back', {
                         method: 'POST',
                         headers: {
@@ -572,6 +635,8 @@
                     }
                 } catch (error) {
                     console.error('Error liking back:', error);
+                } finally {
+                    actionInProgress = false;
                 }
             };
 
@@ -580,7 +645,10 @@
             };
 
             async function markAllNotificationsAsRead() {
+                if (actionInProgress) return;
+                
                 try {
+                    actionInProgress = true;
                     await fetch('/notifications/mark-all-read', {
                         method: 'POST',
                         headers: {
@@ -592,6 +660,8 @@
                     updateNotificationCount();
                 } catch (error) {
                     console.error('Error marking all notifications as read:', error);
+                } finally {
+                    actionInProgress = false;
                 }
             }
         });

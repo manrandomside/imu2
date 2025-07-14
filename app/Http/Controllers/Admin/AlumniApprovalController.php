@@ -2,11 +2,12 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Http\Controllers\Controller; // ✅ PENTING: Tambahkan import ini
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 
-class AlumniApprovalController
+class AlumniApprovalController extends Controller // ✅ PENTING: Extend Controller
 {
     /**
      * Check if user is admin (digunakan di setiap method)
