@@ -62,6 +62,9 @@ class Kernel extends HttpKernel
         'verified' => \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
         // TAMBAHKAN ALIAS UNTUK MIDDLEWARE KITA DI SINI
         'profile_complete' => \App\Http\Middleware\CheckProfileCompletion::class,
+        'role' => \App\Http\Middleware\RoleMiddleware::class,
+        'admin' => \App\Http\Middleware\AdminOnlyMiddleware::class,
+        'moderator' => \App\Http\Middleware\ModeratorOrAdminMiddleware::class,
     ];
 
     /**

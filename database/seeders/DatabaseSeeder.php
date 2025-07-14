@@ -21,12 +21,15 @@ class DatabaseSeeder extends Seeder
         //     'email' => 'test@example.com',
         // ]);
 
-        // ✅ TAMBAHAN: Call ChatGroupSeeder
+        // ✅ UPDATED: Complete seeding sequence
         $this->call([
-            ChatGroupSeeder::class,
+            ChatGroupSeeder::class,           // Create communities & basic setup
+            AdminModeratorSeeder::class,      // Fix admin/moderator roles & assignments
         ]);
 
-        // ℹ️ INFO: ChatGroupSeeder akan otomatis membuat admin user jika belum ada
+        // ℹ️ INFO: 
+        // - ChatGroupSeeder akan otomatis membuat admin user jika belum ada
+        // - CommunitySeeder akan membuat komunitas lengkap dengan moderator dan sample posts
         // Jadi tidak perlu factory di sini
     }
 }

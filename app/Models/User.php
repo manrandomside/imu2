@@ -45,25 +45,366 @@ class User extends Authenticatable
         ];
     }
 
+    // ===============================================
+    // ✅ FIXED: ROLE MANAGEMENT METHODS untuk View Baru
+    // ===============================================
+
     /**
-     * Debugging method: Get raw match_categories from database
+     * Check if user is admin
      */
-    public function getRawMatchCategories()
+    public function isAdmin()
     {
-        $raw = \DB::table('users')->where('id', $this->id)->value('match_categories');
+        return $this->role === 'admin';
+    }
+
+    /**
+     * Check if user is moderator
+     */
+    public function isModerator()
+    {
+        return $this->role === 'moderator';
+    }
+
+    /**
+     * Check if user is regular student/alumni/staff
+     */
+    public function isRegularUser()
+    {
+        return in_array($this->role, ['mahasiswa', 'alumni', 'tenaga_pendidik']);
+    }
+
+    /**
+     * Check if user has admin or moderator privileges
+     */
+    public function hasModeratorPrivileges()
+    {
+        return in_array($this->role, ['admin', 'moderator']);
+    }
+
+    /**
+     * ✅ FIXED: Get user role display name (required by view)
+     */
+    public function getRoleDisplayAttribute()
+    {
+        $roleNames = [
+            'admin' => 'Administrator',
+            'moderator' => 'Moderator',
+            'mahasiswa' => 'Mahasiswa', 
+            'alumni' => 'Alumni',
+            'tenaga_pendidik' => 'Tenaga Pendidik'
+        ];
+
+        return $roleNames[$this->role] ?? ucfirst($this->role);
+    }
+
+    /**
+     * ✅ FIXED: Get user role badge color (required by view)
+     */
+    public function getRoleBadgeColorAttribute()
+    {
+        $colors = [
+            'admin' => 'bg-red-500 text-white',
+            'moderator' => 'bg-purple-500 text-white',
+            'mahasiswa' => 'bg-blue-500 text-white',
+            'alumni' => 'bg-green-500 text-white',
+            'tenaga_pendidik' => 'bg-yellow-500 text-black'
+        ];
+
+        return $colors[$this->role] ?? 'bg-gray-500 text-white';
+    }
+
+    /**
+     * ✅ FIXED: Get user role icon (required by view)
+     */
+    public function getRoleIconAttribute()
+    {
+        $icons = [
+            'admin' => '👑',
+            'moderator' => '🛡️',
+            'mahasiswa' => '🎓',
+            'alumni' => '🏆',
+            'tenaga_pendidik' => '👩‍🏫'
+        ];
+
+        return $icons[$this->role] ?? '👤';
+    }
+
+    // ===============================================
+    // ✅ FIXED: COMMUNITY MODERATION RELATIONSHIPS
+    // ===============================================
+
+    /**
+     * Communities where this user is moderator
+     */
+    public function moderatedCommunities()
+    {
+        return $this->hasMany(ChatGroup::class, 'moderator_id');
+    }
+
+    /**
+     * Communities created by this user
+     */
+    public function createdCommunities()
+    {
+        return $this->hasMany(ChatGroup::class, 'creator_id');
+    }
+
+    /**
+     * Get all communities this user can moderate (created + assigned as moderator)
+     */
+    public function getAllModeratedCommunities()
+    {
+        if ($this->isAdmin()) {
+            // Admin can moderate all approved communities
+            return ChatGroup::where('is_approved', true)->get();
+        }
+
+        // Get communities where user is creator OR moderator
+        return ChatGroup::where(function($query) {
+                $query->where('creator_id', $this->id)
+                      ->orWhere('moderator_id', $this->id);
+            })
+            ->where('is_approved', true)
+            ->get();
+    }
+
+    /**
+     * Check if user can moderate specific community
+     */
+    public function canModerateCommunity($communityId)
+    {
+        if ($this->isAdmin()) {
+            return true;
+        }
+
+        return ChatGroup::where('id', $communityId)
+                       ->where(function($query) {
+                           $query->where('creator_id', $this->id)
+                                 ->orWhere('moderator_id', $this->id);
+                       })
+                       ->exists();
+    }
+
+    /**
+     * Get communities where user can post
+     */
+    public function getPostableCommunities()
+    {
+        if ($this->isAdmin()) {
+            // Admin can post to all approved communities
+            return ChatGroup::where('is_approved', true)->get();
+        }
+
+        if ($this->isModerator()) {
+            // Moderator can post to assigned communities
+            return $this->getAllModeratedCommunities();
+        }
+
+        // Regular users cannot post to any community
+        return collect();
+    }
+
+    // ===============================================
+    // ✅ SCOPE METHODS FOR FILTERING
+    // ===============================================
+
+    /**
+     * Scope untuk admin users
+     */
+    public function scopeAdmins($query)
+    {
+        return $query->where('role', 'admin');
+    }
+
+    /**
+     * Scope untuk moderator users
+     */
+    public function scopeModerators($query)
+    {
+        return $query->where('role', 'moderator');
+    }
+
+    /**
+     * Scope untuk users dengan moderator privileges (admin + moderator)
+     */
+    public function scopeWithModeratorPrivileges($query)
+    {
+        return $query->whereIn('role', ['admin', 'moderator']);
+    }
+
+    /**
+     * Scope untuk regular users (non-admin, non-moderator)
+     */
+    public function scopeRegularUsers($query)
+    {
+        return $query->whereIn('role', ['mahasiswa', 'alumni', 'tenaga_pendidik']);
+    }
+
+    // ===============================================
+    // ✅ STATIC HELPER METHODS
+    // ===============================================
+
+    /**
+     * Get all available roles
+     */
+    public static function getAvailableRoles()
+    {
         return [
-            'raw_value' => $raw,
-            'raw_type' => gettype($raw),
-            'json_decode' => json_decode($raw, true),
-            'cast_value' => $this->match_categories,
-            'cast_type' => gettype($this->match_categories),
-            'is_array' => is_array($this->match_categories)
+            'mahasiswa' => 'Mahasiswa',
+            'alumni' => 'Alumni', 
+            'tenaga_pendidik' => 'Tenaga Pendidik',
+            'moderator' => 'Moderator',
+            'admin' => 'Administrator'
         ];
     }
 
-    // =====================================================
-    // ACCESSOR & MUTATOR UNTUK INTERESTS (BARU - MINIMAL)
-    // =====================================================
+    /**
+     * Get moderator-eligible roles
+     */
+    public static function getModeratorEligibleRoles()
+    {
+        return ['moderator', 'admin'];
+    }
+
+    /**
+     * Create moderator user
+     */
+    public static function createModerator($data)
+    {
+        return self::create(array_merge($data, [
+            'role' => 'moderator',
+            'is_verified' => true
+        ]));
+    }
+
+    // ===============================================
+    // ✅ VALIDATION HELPERS
+    // ===============================================
+
+    /**
+     * Check if role transition is valid
+     */
+    public function canChangeRoleTo($newRole)
+    {
+        // Admin can change to any role
+        if (auth()->user()?->isAdmin()) {
+            return true;
+        }
+
+        // Regular users cannot change their own role
+        if (auth()->id() === $this->id) {
+            return false;
+        }
+
+        // Only admin can assign moderator role
+        if ($newRole === 'moderator' && !auth()->user()?->isAdmin()) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Get role upgrade path suggestions
+     */
+    public function getRoleUpgradeSuggestions()
+    {
+        $suggestions = [];
+
+        if ($this->isRegularUser()) {
+            $suggestions[] = [
+                'role' => 'moderator',
+                'reason' => 'Promosi ke moderator untuk mengelola komunitas tertentu'
+            ];
+        }
+
+        if ($this->isModerator()) {
+            $suggestions[] = [
+                'role' => 'admin', 
+                'reason' => 'Promosi ke admin untuk akses penuh sistem'
+            ];
+        }
+
+        return $suggestions;
+    }
+
+    // ===============================================
+    // ✅ EXISTING METHODS (MATCH CATEGORIES - DARI VERSI LAMA)
+    // ===============================================
+
+    /**
+     * Safely get match categories as array
+     */
+    public function getMatchCategoriesAttribute($value)
+    {
+        if (is_array($value)) {
+            return $value;
+        }
+        
+        if (empty($value)) {
+            return [];
+        }
+        
+        if (is_string($value)) {
+            $decoded = json_decode($value, true);
+            return is_array($decoded) ? $decoded : [];
+        }
+        
+        return [];
+    }
+
+    /**
+     * Safely set match categories
+     */
+    public function setMatchCategoriesAttribute($value)
+    {
+        if (is_array($value)) {
+            $this->attributes['match_categories'] = json_encode($value);
+        } elseif (is_string($value)) {
+            $decoded = json_decode($value, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                $this->attributes['match_categories'] = $value;
+            } else {
+                $this->attributes['match_categories'] = json_encode([]);
+            }
+        } else {
+            $this->attributes['match_categories'] = json_encode([]);
+        }
+    }
+
+    /**
+     * Check if user has specific match category
+     */
+    public function hasMatchCategory($category)
+    {
+        $categories = $this->match_categories;
+        return is_array($categories) && in_array($category, $categories);
+    }
+
+    /**
+     * Check if user has any of the specified match categories
+     */
+    public function hasAnyMatchCategory(array $categories)
+    {
+        $userCategories = $this->match_categories;
+        return is_array($userCategories) && !empty(array_intersect($userCategories, $categories));
+    }
+
+    /**
+     * Get users with matching categories
+     */
+    public static function withMatchingCategories(array $categories)
+    {
+        return static::whereNotNull('match_categories')
+                    ->get()
+                    ->filter(function ($user) use ($categories) {
+                        return $user->hasAnyMatchCategory($categories);
+                    });
+    }
+
+    // ===============================================
+    // ✅ INTERESTS METHODS (DARI VERSI LAMA)
+    // ===============================================
 
     /**
      * Get interests as array
@@ -98,10 +439,6 @@ class User extends Authenticatable
         }
     }
 
-    // =====================================================
-    // HELPER METHODS UNTUK INTERESTS (BARU - MINIMAL)
-    // =====================================================
-
     /**
      * Check if user has specific interest
      */
@@ -111,9 +448,25 @@ class User extends Authenticatable
         return is_array($interests) && in_array($interest, $interests);
     }
 
-    // =====================================================
-    // METHOD DEBUG YANG SUDAH ADA (TIDAK BERUBAH)
-    // =====================================================
+    // ===============================================
+    // ✅ DEBUG METHODS (DARI VERSI LAMA) 
+    // ===============================================
+
+    /**
+     * Debugging method: Get raw match_categories from database
+     */
+    public function getRawMatchCategories()
+    {
+        $raw = \DB::table('users')->where('id', $this->id)->value('match_categories');
+        return [
+            'raw_value' => $raw,
+            'raw_type' => gettype($raw),
+            'json_decode' => json_decode($raw, true),
+            'cast_value' => $this->match_categories,
+            'cast_type' => gettype($this->match_categories),
+            'is_array' => is_array($this->match_categories)
+        ];
+    }
 
     /**
      * Method debug sederhana yang mudah digunakan di tinker
@@ -161,14 +514,23 @@ class User extends Authenticatable
         echo "hasMatchCategory('jobs'): " . ($this->hasMatchCategory('jobs') ? 'YES' : 'NO') . "\n";
         echo "hasAnyMatchCategory(['friends', 'jobs']): " . ($this->hasAnyMatchCategory(['friends', 'jobs']) ? 'YES' : 'NO') . "\n";
         echo "hasInterest('photography'): " . ($this->hasInterest('photography') ? 'YES' : 'NO') . "\n";
+        
+        // ✅ TAMBAHAN DEBUG UNTUK ROLE ATTRIBUTES
+        echo "\n--- ROLE ATTRIBUTES CHECK ---\n";
+        echo "Role: " . $this->role . "\n";
+        echo "Role Display: " . $this->role_display . "\n";
+        echo "Role Badge Color: " . $this->role_badge_color . "\n";
+        echo "Role Icon: " . $this->role_icon . "\n";
+        echo "Is Admin: " . ($this->isAdmin() ? 'YES' : 'NO') . "\n";
+        echo "Is Moderator: " . ($this->isModerator() ? 'YES' : 'NO') . "\n";
         echo "============================================\n\n";
         
         return $this;
     }
 
-    // =====================================================
-    // SEMUA METHOD LAINNYA TETAP SAMA SEPERTI SEBELUMNYA
-    // =====================================================
+    // ===============================================
+    // ✅ STATIC DEBUG METHODS (DARI VERSI LAMA)
+    // ===============================================
 
     public static function debugAllUsers()
     {
@@ -190,9 +552,11 @@ class User extends Authenticatable
         
         foreach ($users as $user) {
             echo "User {$user->id} ({$user->full_name}):\n";
+            echo "  Role: {$user->role}\n";
             echo "  Categories: " . json_encode($user->match_categories) . "\n";
             echo "  Is Array: " . (is_array($user->match_categories) ? 'YES' : 'NO') . "\n";
-            echo "  Count: " . (is_array($user->match_categories) ? count($user->match_categories) : 0) . "\n\n";
+            echo "  Count: " . (is_array($user->match_categories) ? count($user->match_categories) : 0) . "\n";
+            echo "  Role Display: " . $user->role_display . "\n\n";
         }
         
         echo "=====================================\n\n";
@@ -316,75 +680,5 @@ class User extends Authenticatable
         echo "=========================================\n\n";
         
         return $matchedUsers;
-    }
-
-    /**
-     * Safely get match categories as array
-     */
-    public function getMatchCategoriesAttribute($value)
-    {
-        if (is_array($value)) {
-            return $value;
-        }
-        
-        if (empty($value)) {
-            return [];
-        }
-        
-        if (is_string($value)) {
-            $decoded = json_decode($value, true);
-            return is_array($decoded) ? $decoded : [];
-        }
-        
-        return [];
-    }
-
-    /**
-     * Safely set match categories
-     */
-    public function setMatchCategoriesAttribute($value)
-    {
-        if (is_array($value)) {
-            $this->attributes['match_categories'] = json_encode($value);
-        } elseif (is_string($value)) {
-            $decoded = json_decode($value, true);
-            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-                $this->attributes['match_categories'] = $value;
-            } else {
-                $this->attributes['match_categories'] = json_encode([]);
-            }
-        } else {
-            $this->attributes['match_categories'] = json_encode([]);
-        }
-    }
-
-    /**
-     * Check if user has specific match category
-     */
-    public function hasMatchCategory($category)
-    {
-        $categories = $this->match_categories;
-        return is_array($categories) && in_array($category, $categories);
-    }
-
-    /**
-     * Check if user has any of the specified match categories
-     */
-    public function hasAnyMatchCategory(array $categories)
-    {
-        $userCategories = $this->match_categories;
-        return is_array($userCategories) && !empty(array_intersect($userCategories, $categories));
-    }
-
-    /**
-     * Get users with matching categories
-     */
-    public static function withMatchingCategories(array $categories)
-    {
-        return static::whereNotNull('match_categories')
-                    ->get()
-                    ->filter(function ($user) use ($categories) {
-                        return $user->hasAnyMatchCategory($categories);
-                    });
     }
 }

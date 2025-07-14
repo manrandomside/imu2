@@ -6,6 +6,7 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\CommunityController;
 use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\ModeratorController; // ✅ TAMBAHKAN INI
 
 // Rute default, bisa diarahkan ke halaman login atau register nantinya
 Route::get('/', function () {
@@ -79,18 +80,17 @@ Route::middleware(['auth'])->group(function () {
 
 Route::middleware(['auth'])->group(function () {
     
-    // ✅ BASIC COMMUNITY ROUTES
+    // ✅ BASIC COMMUNITY ROUTES (Enhanced with permission checking)
     Route::get('/community', [CommunityController::class, 'showCommunityChatPage'])->name('community');
     Route::post('/community/send-message', [CommunityController::class, 'sendGroupMessage'])->name('community.send_message');
     Route::get('/community/messages', [CommunityController::class, 'getMessages'])->name('community.get_messages');
     Route::get('/community/stats', [CommunityController::class, 'getStats'])->name('community.stats');
     
-    // ✅ REACTIONS SYSTEM ROUTES
+    // ✅ REACTIONS & COMMENTS SYSTEM
     Route::post('/community/reactions', [CommunityController::class, 'addReaction'])->name('community.add_reaction');
     Route::delete('/community/reactions/{messageId}', [CommunityController::class, 'removeReaction'])->name('community.remove_reaction');
     Route::get('/community/reactions/{messageId}', [CommunityController::class, 'getReactions'])->name('community.get_reactions');
     
-    // ✅ COMMENTS SYSTEM ROUTES  
     Route::post('/community/comments', [CommunityController::class, 'addComment'])->name('community.add_comment');
     Route::get('/community/comments', [CommunityController::class, 'loadComments'])->name('community.load_comments');
     Route::delete('/community/comments/{commentId}', [CommunityController::class, 'deleteComment'])->name('community.delete_comment');
@@ -102,12 +102,48 @@ Route::middleware(['auth'])->group(function () {
     // ✅ FILE MANAGEMENT ROUTES
     Route::delete('/community/attachments/{messageId}', [CommunityController::class, 'deleteAttachment'])->name('community.delete_attachment');
     Route::get('/community/attachments/{messageId}/download', [CommunityController::class, 'downloadAttachment'])->name('community.download_attachment');
+});
+
+// ===================================================================
+// ✅ MODERATOR-ONLY ROUTES (Moderator + Admin access)
+// ===================================================================
+
+Route::middleware(['auth'])->group(function () {
     
-    // ✅ MESSAGE MANAGEMENT ROUTES (for moderators/admins)
+    // ✅ MESSAGE MODERATION (for assigned communities only)
+    // Note: Middleware 'role:moderator,admin' akan ditambahkan setelah middleware terdaftar
     Route::delete('/community/messages/{messageId}', [CommunityController::class, 'deleteMessage'])->name('community.delete_message');
     Route::put('/community/messages/{messageId}', [CommunityController::class, 'editMessage'])->name('community.edit_message');
+    Route::post('/community/messages/{messageId}/pin', [CommunityController::class, 'pinMessage'])->name('community.pin_message');
+    Route::delete('/community/messages/{messageId}/pin', [CommunityController::class, 'unpinMessage'])->name('community.unpin_message');
     
-    // ✅ GROUP MANAGEMENT ROUTES (for admins)
+    // ✅ MODERATION DASHBOARD - Sementara tanpa middleware khusus
+    Route::get('/moderator/dashboard', [ModeratorController::class, 'dashboard'])->name('moderator.dashboard');
+    Route::get('/moderator/communities', [ModeratorController::class, 'getMyCommunities'])->name('moderator.communities');
+    Route::get('/moderator/reports', [ModeratorController::class, 'getReports'])->name('moderator.reports');
+    Route::post('/moderator/reports/{reportId}/resolve', [ModeratorController::class, 'resolveReport'])->name('moderator.resolve_report');
+    
+    // ✅ COMMUNITY STATISTICS for assigned communities
+    Route::get('/moderator/stats/{groupId}', [ModeratorController::class, 'getCommunityStats'])->name('moderator.community_stats');
+});
+
+// ===================================================================
+// ✅ ADMIN-ONLY ROUTES (Administrator exclusive access)
+// ===================================================================
+
+Route::middleware(['auth'])->group(function () {
+    
+    // ✅ MODERATOR MANAGEMENT - Sementara tanpa middleware khusus, akan divalidasi di controller
+    Route::get('/admin/moderators', [CommunityController::class, 'getAvailableModerators'])->name('admin.get_moderators');
+    Route::post('/admin/groups/{groupId}/assign-moderator', [CommunityController::class, 'assignModerator'])->name('admin.assign_moderator');
+    Route::delete('/admin/groups/{groupId}/unassign-moderator', [CommunityController::class, 'unassignModerator'])->name('admin.unassign_moderator');
+    
+    // ✅ USER ROLE MANAGEMENT
+    Route::post('/admin/users/{userId}/promote-to-moderator', [ModeratorController::class, 'promoteToModerator'])->name('admin.promote_moderator');
+    Route::post('/admin/users/{userId}/demote-from-moderator', [ModeratorController::class, 'demoteFromModerator'])->name('admin.demote_moderator');
+    Route::get('/admin/users/eligible-for-moderation', [ModeratorController::class, 'getEligibleModerators'])->name('admin.eligible_moderators');
+    
+    // ✅ COMMUNITY MANAGEMENT (yang sudah ada)
     Route::get('/community/groups', [CommunityController::class, 'getGroups'])->name('community.get_groups');
     Route::post('/community/groups', [CommunityController::class, 'createGroup'])->name('community.create_group');
     Route::put('/community/groups/{groupId}', [CommunityController::class, 'updateGroup'])->name('community.update_group');
@@ -122,12 +158,189 @@ Route::middleware(['auth'])->group(function () {
 });
 
 // ===================================================================
-// DEBUG ROUTES (Development Only)
+// ✅ ENHANCED DEBUG ROUTES (Development Only) 
 // ===================================================================
 
 Route::middleware(['auth'])->group(function () {
     
-    // ✅ MATCH CATEGORIES DEBUG
+    // ✅ ROLE DEBUGGING
+    Route::get('/debug/user-roles', function() {
+        if (!app()->environment('local')) {
+            abort(403, 'Only available in local environment');
+        }
+        
+        $users = App\Models\User::with(['moderatedCommunities', 'createdCommunities'])
+                                ->get()
+                                ->map(function($user) {
+                                    return [
+                                        'id' => $user->id,
+                                        'name' => $user->full_name,
+                                        'role' => $user->role,
+                                        'is_admin' => $user->role === 'admin',
+                                        'is_moderator' => $user->role === 'moderator',
+                                        'moderated_communities' => $user->moderatedCommunities ? $user->moderatedCommunities->pluck('name') : [],
+                                        'created_communities' => $user->createdCommunities ? $user->createdCommunities->pluck('name') : [],
+                                    ];
+                                });
+        
+        return response()->json([
+            'users' => $users,
+            'role_distribution' => [
+                'admin' => App\Models\User::where('role', 'admin')->count(),
+                'moderator' => App\Models\User::where('role', 'moderator')->count(),
+                'mahasiswa' => App\Models\User::where('role', 'mahasiswa')->count(),
+                'alumni' => App\Models\User::where('role', 'alumni')->count(),
+                'tenaga_pendidik' => App\Models\User::where('role', 'tenaga_pendidik')->count(),
+            ]
+        ], 200, [], JSON_PRETTY_PRINT);
+    })->name('debug.user_roles');
+    
+    // ✅ PERMISSION DEBUGGING
+    Route::get('/debug/community-permissions/{groupId}', function($groupId) {
+        if (!app()->environment('local')) {
+            abort(403, 'Only available in local environment');
+        }
+        
+        $currentUser = Auth::user();
+        $group = App\Models\ChatGroup::with(['creator', 'moderator'])->find($groupId);
+        
+        if (!$group) {
+            return response()->json(['error' => 'Group not found'], 404);
+        }
+        
+        return response()->json([
+            'user' => [
+                'id' => $currentUser->id,
+                'name' => $currentUser->full_name,
+                'role' => $currentUser->role,
+            ],
+            'group' => [
+                'id' => $group->id,
+                'name' => $group->name,
+                'creator' => $group->creator ? [
+                    'id' => $group->creator->id,
+                    'name' => $group->creator->full_name,
+                    'role' => $group->creator->role
+                ] : null,
+                'moderator' => $group->moderator ? [
+                    'id' => $group->moderator->id,
+                    'name' => $group->moderator->full_name,
+                    'role' => $group->moderator->role
+                ] : null
+            ],
+            'permissions' => [
+                'is_admin' => $currentUser->role === 'admin',
+                'is_creator' => $group->creator_id === $currentUser->id,
+                'is_moderator' => $group->moderator_id === $currentUser->id
+            ]
+        ], 200, [], JSON_PRETTY_PRINT);
+    })->name('debug.community_permissions');
+    
+    // ✅ MIGRATION STATUS CHECK
+    Route::get('/debug/migration-status', function() {
+        if (!app()->environment('local')) {
+            abort(403, 'Only available in local environment');
+        }
+        
+        try {
+            // Check moderator users
+            $moderators = App\Models\User::where('role', 'moderator')->get();
+            
+            // Check community assignments
+            $communityAssignments = App\Models\ChatGroup::whereNotNull('moderator_id')
+                                                       ->with('moderator')
+                                                       ->get();
+            
+            return response()->json([
+                'moderator_count' => $moderators->count(),
+                'moderators' => $moderators->map(function($user) {
+                    return [
+                        'id' => $user->id,
+                        'name' => $user->full_name,
+                        'role' => $user->role
+                    ];
+                }),
+                'community_assignments' => $communityAssignments->map(function($group) {
+                    return [
+                        'group_id' => $group->id,
+                        'group_name' => $group->name,
+                        'moderator_id' => $group->moderator_id,
+                        'moderator_name' => $group->moderator ? $group->moderator->full_name : null
+                    ];
+                }),
+                'system_status' => 'operational'
+            ], 200, [], JSON_PRETTY_PRINT);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => $e->getMessage(),
+                'system_status' => 'error'
+            ], 500, [], JSON_PRETTY_PRINT);
+        }
+    })->name('debug.migration_status');
+    
+    // ✅ FIX ROLES MANUALLY (Emergency Fix)
+    Route::post('/debug/fix-moderator-roles', function() {
+        if (!app()->environment('local')) {
+            abort(403, 'Only available in local environment');
+        }
+        
+        try {
+            // Update users with "Moderator" in name to have moderator role
+            $updated = DB::table('users')
+                        ->where('full_name', 'LIKE', '%Moderator%')
+                        ->where('role', '!=', 'moderator')
+                        ->update(['role' => 'moderator']);
+            
+            // Fix specific moderator assignments
+            $assignments = [
+                'PKM & Kompetisi' => 'Moderator PKM',
+                'Lomba' => 'Moderator Lomba',
+                'Info Beasiswa' => 'Moderator Beasiswa',
+                'Event & Workshop' => 'Moderator Workshop',
+                'Lowongan Kerja' => 'Moderator Lowongan',
+            ];
+            
+            $assignmentResults = [];
+            foreach ($assignments as $groupName => $moderatorName) {
+                $group = DB::table('chat_groups')->where('name', 'LIKE', '%' . $groupName . '%')->first();
+                $moderator = DB::table('users')->where('full_name', $moderatorName)->first();
+                
+                if ($group && $moderator) {
+                    DB::table('chat_groups')
+                      ->where('id', $group->id)
+                      ->update(['moderator_id' => $moderator->id]);
+                    
+                    $assignmentResults[] = [
+                        'group' => $group->name,
+                        'moderator' => $moderator->full_name,
+                        'status' => 'assigned'
+                    ];
+                } else {
+                    $assignmentResults[] = [
+                        'group' => $groupName,
+                        'moderator' => $moderatorName,
+                        'status' => 'failed - not found'
+                    ];
+                }
+            }
+            
+            return response()->json([
+                'status' => 'success',
+                'updated_users' => $updated,
+                'assignments' => $assignmentResults,
+                'message' => 'Moderator roles and assignments fixed successfully'
+            ], 200, [], JSON_PRETTY_PRINT);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ], 500, [], JSON_PRETTY_PRINT);
+        }
+    })->name('debug.fix_moderator_roles');
+    
+    // ✅ EXISTING DEBUG ROUTES (yang sudah ada)
     Route::get('/debug/match-categories', function() {
         if (!app()->environment('local')) {
             abort(403, 'Only available in local environment');
@@ -141,6 +354,7 @@ Route::middleware(['auth'])->group(function () {
             $output['current_user'] = [
                 'id' => $currentUser->id,
                 'name' => $currentUser->full_name,
+                'role' => $currentUser->role,
                 'raw_match_categories' => DB::table('users')->where('id', $currentUser->id)->value('match_categories'),
                 'model_match_categories' => $currentUser->match_categories,
                 'is_array' => is_array($currentUser->match_categories),
@@ -158,6 +372,7 @@ Route::middleware(['auth'])->group(function () {
             $output['all_users_with_categories'][] = [
                 'id' => $user->id,
                 'name' => $user->full_name,
+                'role' => $user->role,
                 'raw' => DB::table('users')->where('id', $user->id)->value('match_categories'),
                 'model' => $user->match_categories,
                 'is_array' => is_array($user->match_categories)
@@ -175,7 +390,6 @@ Route::middleware(['auth'])->group(function () {
         return response()->json($output, 200, [], JSON_PRETTY_PRINT);
     })->name('debug.match_categories');
     
-    // ✅ USER DEBUG
     Route::get('/debug/user/{id}', function ($id) {
         if (!app()->environment('local')) {
             abort(403, 'Only available in local environment');
@@ -189,14 +403,11 @@ Route::middleware(['auth'])->group(function () {
         return response()->json([
             'user_id' => $user->id,
             'full_name' => $user->full_name,
-            'raw_debug' => $user->getRawMatchCategories(),
+            'role' => $user->role,
             'match_categories' => $user->match_categories,
-            'has_friends' => $user->hasMatchCategory('friends'),
-            'has_jobs' => $user->hasMatchCategory('jobs'),
         ], 200, [], JSON_PRETTY_PRINT);
     })->name('debug.user');
     
-    // ✅ UPDATE MATCH CATEGORIES TEST
     Route::post('/debug/update-match-categories', function (\Illuminate\Http\Request $request) {
         if (!app()->environment('local')) {
             abort(403, 'Only available in local environment');
@@ -212,44 +423,8 @@ Route::middleware(['auth'])->group(function () {
             'message' => 'Updated successfully',
             'before' => $user->getOriginal('match_categories'),
             'after' => $user->fresh()->match_categories,
-            'raw_check' => $user->fresh()->getRawMatchCategories()
         ], 200, [], JSON_PRETTY_PRINT);
     })->name('debug.update_match_categories');
-    
-    // ✅ COMMUNITY DEBUG ROUTES
-    Route::get('/debug/community/permissions/{groupId}', function($groupId) {
-        if (!app()->environment('local')) {
-            abort(403, 'Only available in local environment');
-        }
-        
-        $user = Auth::user();
-        $group = \App\Models\ChatGroup::find($groupId);
-        
-        if (!$group) {
-            return response()->json(['error' => 'Group not found'], 404);
-        }
-        
-        return response()->json([
-            'user' => [
-                'id' => $user->id,
-                'name' => $user->full_name,
-                'role' => $user->role
-            ],
-            'group' => [
-                'id' => $group->id,
-                'name' => $group->name,
-                'creator_id' => $group->creator_id,
-                'moderator_id' => $group->moderator_id,
-                'is_approved' => $group->is_approved
-            ],
-            'permissions' => [
-                'can_post' => (new \App\Http\Controllers\CommunityController())->checkPostPermission($user, $group),
-                'is_admin' => $user->role === 'admin',
-                'is_creator' => $group->creator_id === $user->id,
-                'is_moderator' => $group->moderator_id === $user->id
-            ]
-        ], 200, [], JSON_PRETTY_PRINT);
-    })->name('debug.community.permissions');
 });
 
 // ===================================================================
@@ -427,6 +602,11 @@ Route::get('/debug/test-routes', function() {
             'POST /community/comments' => route('community.add_comment'),
             'GET /community/permissions' => route('community.get_permissions'),
         ],
+        'Moderator Routes' => [
+            'GET /moderator/dashboard' => route('moderator.dashboard'),
+            'GET /debug/user-roles' => route('debug.user_roles'),
+            'GET /debug/migration-status' => route('debug.migration_status'),
+        ],
         'Debug Routes' => [
             'GET /debug/match-categories' => route('debug.match_categories'),
             'GET /debug/user/{id}' => url('/debug/user/1'),
@@ -439,4 +619,56 @@ Route::get('/debug/test-routes', function() {
         'available_routes' => $routes,
         'note' => 'These routes are available for testing the community features'
     ], 200, [], JSON_PRETTY_PRINT);
+});
+
+// ===================================================================
+// ✅ API ROUTES for Frontend Integration
+// ===================================================================
+
+Route::prefix('api')->middleware(['auth'])->group(function () {
+    
+    // ✅ User Role Information
+    Route::get('/user/role-info', function() {
+        $user = Auth::user();
+        return response()->json([
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->full_name,
+                'role' => $user->role,
+                'permissions' => [
+                    'is_admin' => $user->role === 'admin',
+                    'is_moderator' => $user->role === 'moderator',
+                    'can_moderate' => in_array($user->role, ['admin', 'moderator']),
+                ]
+            ]
+        ]);
+    })->name('api.user.role_info');
+    
+    // ✅ Communities with Permission Info
+    Route::get('/communities/with-permissions', function() {
+        $user = Auth::user();
+        $communities = App\Models\ChatGroup::where('is_approved', true)
+                                           ->with(['creator:id,full_name,role', 'moderator:id,full_name,role'])
+                                           ->get()
+                                           ->map(function($community) use ($user) {
+                                               return [
+                                                   'id' => $community->id,
+                                                   'name' => $community->name,
+                                                   'description' => $community->description,
+                                                   'creator' => $community->creator,
+                                                   'moderator' => $community->moderator,
+                                                   'permissions' => [
+                                                       'can_read' => true,
+                                                       'can_post' => $user->role === 'admin' || 
+                                                                   $community->creator_id === $user->id ||
+                                                                   $community->moderator_id === $user->id,
+                                                       'can_moderate' => $user->role === 'admin' || 
+                                                                       $community->creator_id === $user->id ||
+                                                                       $community->moderator_id === $user->id,
+                                                   ]
+                                               ];
+                                           });
+        
+        return response()->json(['communities' => $communities]);
+    })->name('api.communities.with_permissions');
 });
