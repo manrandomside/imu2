@@ -135,6 +135,17 @@ class Payment extends Model
         return $this->status === 'pending';
     }
 
+    /**
+     * ✅ NEW: Added canBeRejected() method for consistency
+     */
+    public function canBeRejected()
+    {
+        return $this->status === 'pending';
+    }
+
+    /**
+     * ✅ FIXED: Added safety check for Notification model
+     */
     public function confirm($adminId)
     {
         $this->update([
@@ -149,10 +160,15 @@ class Payment extends Model
             $this->submission->markAsPaid($this->id);
         }
 
-        // Create notification for user
-        Notification::createPaymentNotification($this->id, 'payment_confirmed');
+        // Create notification for user (if Notification model exists)
+        if (class_exists('\App\Models\Notification')) {
+            \App\Models\Notification::createPaymentNotification($this->id, 'payment_confirmed');
+        }
     }
 
+    /**
+     * ✅ FIXED: Added safety check for Notification model
+     */
     public function reject($adminId, $reason)
     {
         $this->update([
@@ -161,8 +177,39 @@ class Payment extends Model
             'rejection_reason' => $reason,
         ]);
 
-        // Create notification for user
-        Notification::createPaymentNotification($this->id, 'payment_rejected');
+        // Create notification for user (if Notification model exists)
+        if (class_exists('\App\Models\Notification')) {
+            \App\Models\Notification::createPaymentNotification($this->id, 'payment_rejected');
+        }
+    }
+
+    /**
+     * ✅ NEW: Method to reset payment for resubmission
+     */
+    public function resetForResubmission()
+    {
+        // Delete old proof file if exists
+        $this->deleteProof();
+        
+        // Reset payment status
+        $this->update([
+            'status' => 'pending',
+            'confirmed_by' => null,
+            'confirmed_at' => null,
+            'rejection_reason' => null,
+            'payment_proof_path' => null,
+            'payment_details' => null,
+        ]);
+        
+        return $this;
+    }
+
+    /**
+     * ✅ NEW: Validate if payment can be edited (for rejected payments)
+     */
+    public function canBeEdited()
+    {
+        return $this->status === 'rejected';
     }
 
     public function deleteProof()
@@ -180,6 +227,50 @@ class Payment extends Model
         }
         
         return false;
+    }
+
+    /**
+     * ✅ NEW: Check if payment has valid proof file
+     */
+    public function hasValidProof()
+    {
+        if (!$this->payment_proof_path) {
+            return false;
+        }
+
+        $storagePath = str_replace('storage/', 'public/', $this->payment_proof_path);
+        return Storage::exists($storagePath);
+    }
+
+    /**
+     * ✅ NEW: Get file size of payment proof
+     */
+    public function getProofFileSize()
+    {
+        if (!$this->hasValidProof()) {
+            return 0;
+        }
+
+        $storagePath = str_replace('storage/', 'public/', $this->payment_proof_path);
+        return Storage::size($storagePath);
+    }
+
+    /**
+     * ✅ NEW: Get formatted file size
+     */
+    public function getFormattedProofFileSizeAttribute()
+    {
+        $bytes = $this->getProofFileSize();
+        
+        if ($bytes === 0) return null;
+        
+        $units = ['B', 'KB', 'MB', 'GB'];
+        
+        for ($i = 0; $bytes > 1024 && $i < count($units) - 1; $i++) {
+            $bytes /= 1024;
+        }
+        
+        return round($bytes, 2) . ' ' . $units[$i];
     }
 
     /**
@@ -245,5 +336,57 @@ class Payment extends Model
             'total_revenue' => static::getRevenue(),
             'revenue_this_month' => static::getRevenue(now()->startOfMonth(), now()->endOfMonth()),
         ];
+    }
+
+    /**
+     * ✅ NEW: Get payment statistics for specific user
+     */
+    public static function getUserStats($userId)
+    {
+        return [
+            'total_payments' => static::where('user_id', $userId)->count(),
+            'pending_payments' => static::where('user_id', $userId)->pending()->count(),
+            'confirmed_payments' => static::where('user_id', $userId)->confirmed()->count(),
+            'rejected_payments' => static::where('user_id', $userId)->rejected()->count(),
+            'total_amount_paid' => static::where('user_id', $userId)->confirmed()->sum('amount'),
+        ];
+    }
+
+    /**
+     * ✅ NEW: Bulk confirm payments (for admin bulk actions)
+     */
+    public static function bulkConfirm(array $paymentIds, $adminId)
+    {
+        $confirmed = 0;
+        
+        foreach ($paymentIds as $paymentId) {
+            $payment = static::find($paymentId);
+            
+            if ($payment && $payment->canBeConfirmed()) {
+                $payment->confirm($adminId);
+                $confirmed++;
+            }
+        }
+        
+        return $confirmed;
+    }
+
+    /**
+     * ✅ NEW: Bulk reject payments (for admin bulk actions)
+     */
+    public static function bulkReject(array $paymentIds, $adminId, $reason)
+    {
+        $rejected = 0;
+        
+        foreach ($paymentIds as $paymentId) {
+            $payment = static::find($paymentId);
+            
+            if ($payment && $payment->canBeRejected()) {
+                $payment->reject($adminId, $reason);
+                $rejected++;
+            }
+        }
+        
+        return $rejected;
     }
 }

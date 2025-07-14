@@ -156,9 +156,25 @@ class ContentSubmission extends Model
         return in_array($this->status, ['pending_payment', 'rejected']);
     }
 
+    /**
+     * ✅ FIXED: Updated canBePaid() method with proper payment validation
+     * Submission can be paid if:
+     * - Status is pending_payment AND
+     * - No payment exists OR existing payment was rejected
+     */
     public function canBePaid()
     {
-        return $this->status === 'pending_payment';
+        return $this->status === 'pending_payment' && 
+               (!$this->payment || $this->payment->status === 'rejected');
+    }
+
+    /**
+     * ✅ NEW: Added canBeDeleted() method for payment system
+     * Submission can be deleted if not yet approved or published
+     */
+    public function canBeDeleted()
+    {
+        return in_array($this->status, ['pending_payment', 'rejected']);
     }
 
     public function canBeApproved()
@@ -179,8 +195,10 @@ class ContentSubmission extends Model
             'submitted_at' => now(),
         ]);
 
-        // Create notification for admin
-        Notification::createSubmissionNotification($this->id, 'submission_pending_approval');
+        // Create notification for admin (if Notification model exists)
+        if (class_exists('\App\Models\Notification')) {
+            \App\Models\Notification::createSubmissionNotification($this->id, 'submission_pending_approval');
+        }
     }
 
     public function approve($adminId, $shouldPublish = false)
@@ -194,9 +212,11 @@ class ContentSubmission extends Model
             'rejection_reason' => null,
         ]);
 
-        // Create notification for user
-        $notificationType = $shouldPublish ? 'submission_published' : 'submission_approved';
-        Notification::createSubmissionNotification($this->id, $notificationType);
+        // Create notification for user (if Notification model exists)
+        if (class_exists('\App\Models\Notification')) {
+            $notificationType = $shouldPublish ? 'submission_published' : 'submission_approved';
+            \App\Models\Notification::createSubmissionNotification($this->id, $notificationType);
+        }
 
         // If published, create the actual group message
         if ($shouldPublish) {
@@ -212,8 +232,10 @@ class ContentSubmission extends Model
             'rejection_reason' => $reason,
         ]);
 
-        // Create notification for user
-        Notification::createSubmissionNotification($this->id, 'submission_rejected');
+        // Create notification for user (if Notification model exists)
+        if (class_exists('\App\Models\Notification')) {
+            \App\Models\Notification::createSubmissionNotification($this->id, 'submission_rejected');
+        }
     }
 
     public function publishToGroup()
@@ -223,11 +245,11 @@ class ContentSubmission extends Model
         }
 
         // Find the corresponding chat group
-        $chatGroup = ChatGroup::where('name', 'LIKE', '%' . $this->category->name . '%')->first();
+        $chatGroup = \App\Models\ChatGroup::where('name', 'LIKE', '%' . $this->category->name . '%')->first();
         
         if (!$chatGroup) {
             // Create group if doesn't exist
-            $chatGroup = ChatGroup::create([
+            $chatGroup = \App\Models\ChatGroup::create([
                 'name' => $this->category->name,
                 'description' => $this->category->description,
                 'creator_id' => 1, // Admin user
@@ -235,21 +257,23 @@ class ContentSubmission extends Model
             ]);
         }
 
-        // Create group message
-        $message = GroupMessage::create([
-            'group_id' => $chatGroup->id,
-            'sender_id' => $this->user_id,
-            'message_content' => "📢 {$this->title}\n\n{$this->description}",
-            'attachment_path' => $this->attachment_path,
-            'attachment_type' => $this->attachment_type,
-            'attachment_name' => $this->attachment_name,
-            'attachment_size' => $this->attachment_size,
-        ]);
+        // Create group message (if GroupMessage model exists)
+        if (class_exists('\App\Models\GroupMessage')) {
+            $message = \App\Models\GroupMessage::create([
+                'group_id' => $chatGroup->id,
+                'sender_id' => $this->user_id,
+                'message_content' => "📢 {$this->title}\n\n{$this->description}",
+                'attachment_path' => $this->attachment_path,
+                'attachment_type' => $this->attachment_type,
+                'attachment_name' => $this->attachment_name,
+                'attachment_size' => $this->attachment_size,
+            ]);
+        }
 
         // Update status to published
         $this->update(['status' => 'published']);
 
-        return $message;
+        return $message ?? true;
     }
 
     public function deleteAttachment()
@@ -350,7 +374,7 @@ class ContentSubmission extends Model
             'approved' => static::approved()->count(),
             'rejected' => static::rejected()->count(),
             'published' => static::published()->count(),
-            'revenue' => Payment::where('status', 'confirmed')->sum('amount'),
+            'revenue' => \App\Models\Payment::where('status', 'confirmed')->sum('amount'),
         ];
     }
 }

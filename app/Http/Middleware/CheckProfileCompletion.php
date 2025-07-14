@@ -30,13 +30,31 @@ class CheckProfileCompletion
                     break;
                 }
             }
-            if (empty($user->interests) || !is_array($user->interests) || count($user->interests) === 0) {
+            
+            // ✅ FIXED: Proper interests check dengan handling JSON string
+            $interests = $user->interests;
+            
+            // Convert JSON string to array if needed
+            if (is_string($interests)) {
+                $interests = json_decode($interests, true);
+            }
+            
+            if (empty($interests) || !is_array($interests) || count($interests) === 0) {
                 $isBasicProfileComplete = false;
             }
 
             // 2. Cek Kelengkapan Kategori Match
             $isMatchCategoriesComplete = true;
-            if (empty($user->match_categories) || !is_array($user->match_categories) || count($user->match_categories) === 0) {
+            
+            // ✅ FIXED: Proper match_categories check dengan handling JSON string
+            $matchCategories = $user->match_categories;
+            
+            // Convert JSON string to array if needed
+            if (is_string($matchCategories)) {
+                $matchCategories = json_decode($matchCategories, true);
+            }
+            
+            if (empty($matchCategories) || !is_array($matchCategories) || count($matchCategories) === 0) {
                 $isMatchCategoriesComplete = false;
             }
 
