@@ -198,6 +198,10 @@ Route::middleware(['auth'])->prefix('admin')->name('admin.')->group(function () 
     Route::get('/alumni-approval/{id}/download', [AlumniApprovalController::class, 'downloadDocument'])
         ->name('alumni-approval.download');
     
+    // ✅ NEW: Cache refresh route for navbar notification badge
+    Route::post('/alumni-approval/refresh-cache', [AlumniApprovalController::class, 'refreshCache'])
+        ->name('alumni-approval.refresh-cache');
+    
     // ✅ MODERATOR MANAGEMENT - Sementara tanpa middleware khusus, akan divalidasi di controller
     Route::get('/moderators', [CommunityController::class, 'getAvailableModerators'])->name('get_moderators');
     Route::post('/groups/{groupId}/assign-moderator', [CommunityController::class, 'assignModerator'])->name('assign_moderator');
