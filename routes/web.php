@@ -6,7 +6,9 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\CommunityController;
 use App\Http\Controllers\NotificationController;
-use App\Http\Controllers\ModeratorController; // ✅ TAMBAHKAN INI
+use App\Http\Controllers\ModeratorController;
+use App\Http\Controllers\ContentSubmissionController;
+use App\Http\Controllers\PaymentController;
 
 // Rute default, bisa diarahkan ke halaman login atau register nantinya
 Route::get('/', function () {
@@ -102,6 +104,63 @@ Route::middleware(['auth'])->group(function () {
     // ✅ FILE MANAGEMENT ROUTES
     Route::delete('/community/attachments/{messageId}', [CommunityController::class, 'deleteAttachment'])->name('community.delete_attachment');
     Route::get('/community/attachments/{messageId}/download', [CommunityController::class, 'downloadAttachment'])->name('community.download_attachment');
+});
+
+// ===================================================================
+// ✅ NEW: CONTENT SUBMISSION ROUTES (User Routes)
+// ===================================================================
+
+Route::middleware(['auth'])->group(function () {
+    
+    // ✅ USER SUBMISSION MANAGEMENT
+    Route::get('/submissions', [ContentSubmissionController::class, 'index'])->name('submissions.index');
+    Route::get('/submissions/create', [ContentSubmissionController::class, 'create'])->name('submissions.create');
+    Route::post('/submissions', [ContentSubmissionController::class, 'store'])->name('submissions.store');
+    Route::get('/submissions/{submission}', [ContentSubmissionController::class, 'show'])->name('submissions.show');
+    Route::get('/submissions/{submission}/edit', [ContentSubmissionController::class, 'edit'])->name('submissions.edit');
+    Route::put('/submissions/{submission}', [ContentSubmissionController::class, 'update'])->name('submissions.update');
+    Route::delete('/submissions/{submission}', [ContentSubmissionController::class, 'destroy'])->name('submissions.destroy');
+    Route::get('/submissions/{submission}/download', [ContentSubmissionController::class, 'downloadAttachment'])->name('submissions.download');
+    
+    // ✅ API ROUTES
+    Route::get('/api/submissions/stats', [ContentSubmissionController::class, 'getStats'])->name('api.submissions.stats');
+});
+
+// ===================================================================
+// ✅ NEW: PAYMENT ROUTES (User Routes)
+// ===================================================================
+
+Route::middleware(['auth'])->group(function () {
+    
+    // ✅ USER PAYMENT MANAGEMENT
+    Route::get('/payments/{submission}/create', [PaymentController::class, 'create'])->name('payments.create');
+    Route::post('/payments/{submission}', [PaymentController::class, 'store'])->name('payments.store');
+    Route::get('/payments/{payment}', [PaymentController::class, 'show'])->name('payments.show');
+    Route::get('/payments/{payment}/edit', [PaymentController::class, 'edit'])->name('payments.edit');
+    Route::put('/payments/{payment}', [PaymentController::class, 'update'])->name('payments.update');
+    Route::get('/payments/{payment}/download-proof', [PaymentController::class, 'downloadProof'])->name('payments.download_proof');
+});
+
+// ===================================================================
+// ✅ NEW: ADMIN ROUTES FOR CONTENT SUBMISSION & PAYMENT MANAGEMENT
+// ===================================================================
+
+Route::middleware(['auth'])->group(function () {
+    
+    // ✅ ADMIN SUBMISSION MANAGEMENT
+    Route::get('/admin/submissions', [ContentSubmissionController::class, 'adminIndex'])->name('admin.submissions.index');
+    Route::post('/admin/submissions/{submission}/approve', [ContentSubmissionController::class, 'approve'])->name('admin.submissions.approve');
+    Route::post('/admin/submissions/{submission}/reject', [ContentSubmissionController::class, 'reject'])->name('admin.submissions.reject');
+    Route::post('/admin/submissions/{submission}/publish', [ContentSubmissionController::class, 'publish'])->name('admin.submissions.publish');
+    
+    // ✅ ADMIN PAYMENT MANAGEMENT  
+    Route::get('/admin/payments', [PaymentController::class, 'adminIndex'])->name('admin.payments.index');
+    Route::post('/admin/payments/{payment}/confirm', [PaymentController::class, 'confirm'])->name('admin.payments.confirm');
+    Route::post('/admin/payments/{payment}/reject', [PaymentController::class, 'reject'])->name('admin.payments.reject');
+    Route::post('/admin/payments/bulk-action', [PaymentController::class, 'bulkAction'])->name('admin.payments.bulk_action');
+    
+    // ✅ ADMIN API ROUTES
+    Route::get('/api/admin/payments/stats', [PaymentController::class, 'getStats'])->name('api.admin.payments.stats');
 });
 
 // ===================================================================
@@ -428,9 +487,77 @@ Route::middleware(['auth'])->group(function () {
 });
 
 // ===================================================================
-// TEST DATA SEEDING ROUTES (Development Only)
+// ✅ NEW: SUBMISSION & PAYMENT TEST DATA SEEDING (Development Only)
 // ===================================================================
 
+Route::get('/debug/seed-submission-data', function () {
+    if (!app()->environment('local')) {
+        abort(403, 'Only available in local environment');
+    }
+    
+    try {
+        // Create test submission categories if not exist
+        $categories = [
+            [
+                'name' => 'Lomba & Kompetisi',
+                'slug' => 'lomba-kompetisi',
+                'description' => 'Submit informasi lomba dan kompetisi untuk mahasiswa',
+                'price' => 5000.00,
+                'allowed_file_types' => json_encode(['jpg', 'jpeg', 'png', 'pdf', 'doc', 'docx']),
+                'max_file_size' => 10485760
+            ],
+            [
+                'name' => 'Lowongan Kerja',
+                'slug' => 'lowongan-kerja',
+                'description' => 'Submit lowongan kerja dan magang',
+                'price' => 5000.00,
+                'allowed_file_types' => json_encode(['jpg', 'jpeg', 'png', 'pdf', 'doc', 'docx']),
+                'max_file_size' => 10485760
+            ]
+        ];
+        
+        foreach ($categories as $categoryData) {
+            \App\Models\SubmissionCategory::updateOrCreate(
+                ['slug' => $categoryData['slug']],
+                $categoryData
+            );
+        }
+        
+        // Create test submissions
+        $user = \App\Models\User::where('role', 'mahasiswa')->first();
+        if ($user) {
+            $category = \App\Models\SubmissionCategory::first();
+            
+            $submission = \App\Models\ContentSubmission::create([
+                'user_id' => $user->id,
+                'category_id' => $category->id,
+                'title' => 'Test Submission - Lomba Programming',
+                'description' => 'Ini adalah test submission untuk lomba programming yang sangat menarik. Deskripsi ini lebih dari 50 karakter untuk memenuhi validasi minimum.',
+                'status' => 'pending_payment'
+            ]);
+            
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Test submission data seeded successfully',
+                'submission_id' => $submission->id,
+                'category_count' => \App\Models\SubmissionCategory::count()
+            ], 200, [], JSON_PRETTY_PRINT);
+        }
+        
+        return response()->json([
+            'status' => 'error',
+            'message' => 'No mahasiswa user found to create test submission'
+        ], 400, [], JSON_PRETTY_PRINT);
+        
+    } catch (\Exception $e) {
+        return response()->json([
+            'status' => 'error',
+            'message' => $e->getMessage()
+        ], 500, [], JSON_PRETTY_PRINT);
+    }
+});
+
+// TEST DATA SEEDING ROUTES (Development Only)
 Route::get('/debug/seed-test-data', function () {
     if (!app()->environment('local')) {
         abort(403, 'Only available in local environment');
@@ -602,6 +729,14 @@ Route::get('/debug/test-routes', function() {
             'POST /community/comments' => route('community.add_comment'),
             'GET /community/permissions' => route('community.get_permissions'),
         ],
+        'Submission Routes' => [
+            'GET /submissions' => route('submissions.index'),
+            'GET /submissions/create' => route('submissions.create'),
+            'GET /admin/submissions' => route('admin.submissions.index'),
+        ],
+        'Payment Routes' => [
+            'GET /admin/payments' => route('admin.payments.index'),
+        ],
         'Moderator Routes' => [
             'GET /moderator/dashboard' => route('moderator.dashboard'),
             'GET /debug/user-roles' => route('debug.user_roles'),
@@ -611,13 +746,14 @@ Route::get('/debug/test-routes', function() {
             'GET /debug/match-categories' => route('debug.match_categories'),
             'GET /debug/user/{id}' => url('/debug/user/1'),
             'POST /debug/update-match-categories' => route('debug.update_match_categories'),
+            'GET /debug/seed-submission-data' => url('/debug/seed-submission-data'),
         ]
     ];
     
     return response()->json([
         'status' => 'success',
         'available_routes' => $routes,
-        'note' => 'These routes are available for testing the community features'
+        'note' => 'These routes are available for testing all features including content submission system'
     ], 200, [], JSON_PRETTY_PRINT);
 });
 

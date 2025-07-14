@@ -140,4 +140,19 @@ class Notification extends Model
             ]
         ]);
     }
+    /**
+ * ✅ NEW: Create submission notification
+ */
+public static function createSubmissionNotification($submissionId, $type)
+{
+    // Copy seluruh method dari artifact "model_notification_updated"
+}
+
+/**
+ * ✅ NEW: Create payment notification  
+ */
+public static function createPaymentNotification($paymentId, $type)
+{
+    // Copy seluruh method dari artifact "model_notification_updated"
+}
 }

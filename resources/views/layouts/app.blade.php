@@ -266,6 +266,7 @@
                 <a href="{{ route('chat.personal') }}" class="hover:text-gray-200">Chat</a>
                 <a href="{{ route('find.people') }}" class="hover:text-gray-200">Find</a>
                 <a href="{{ route('community') }}" class="hover:text-gray-200">Community</a>
+                <a href="{{ route('submissions.index') }}" class="hover:text-gray-200">Submit Konten</a>
                 <a href="{{ route('user.profile') }}" class="hover:text-gray-200">Profile</a>
                 
                 {{-- ✅ NOTIFICATION BELL - NEW! --}}
