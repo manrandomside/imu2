@@ -45,7 +45,7 @@ class PaymentController extends Controller
     }
 
     /**
-     * Store payment information
+     * ✅ UPDATED: Store payment information dengan ShopeePay validation
      */
     public function store(Request $request, ContentSubmission $submission)
     {
@@ -62,13 +62,13 @@ class PaymentController extends Controller
                     ->with('error', 'Konten tidak memerlukan pembayaran pada status saat ini.');
             }
 
-            // Validation
+            // ✅ UPDATED: Validation rules untuk ShopeePay dan e-wallet
             $request->validate([
-                'payment_method' => ['required', 'in:transfer_bank,dana,gopay,ovo'],
+                'payment_method' => ['required', 'in:shopeepay,dana,gopay,ovo'],
                 'payment_proof' => ['required', 'image', 'max:5120'], // 5MB max for payment proof
                 'payment_details' => ['nullable', 'array'],
-                'payment_details.sender_name' => ['required_if:payment_method,transfer_bank', 'string', 'max:255'],
-                'payment_details.sender_account' => ['required_if:payment_method,transfer_bank', 'string', 'max:255'],
+                'payment_details.sender_name' => ['nullable', 'string', 'max:255'],
+                'payment_details.sender_account' => ['nullable', 'string', 'max:255'],
                 'payment_details.transaction_id' => ['nullable', 'string', 'max:255'],
             ], [
                 'payment_method.required' => 'Metode pembayaran wajib dipilih.',
@@ -76,8 +76,6 @@ class PaymentController extends Controller
                 'payment_proof.required' => 'Bukti pembayaran wajib diunggah.',
                 'payment_proof.image' => 'Bukti pembayaran harus berupa gambar.',
                 'payment_proof.max' => 'Ukuran bukti pembayaran maksimal 5 MB.',
-                'payment_details.sender_name.required_if' => 'Nama pengirim wajib diisi untuk transfer bank.',
-                'payment_details.sender_account.required_if' => 'Nomor rekening pengirim wajib diisi untuk transfer bank.',
             ]);
 
             // Handle payment proof upload using consistent method
@@ -115,8 +113,18 @@ class PaymentController extends Controller
             // Update submission payment reference
             $submission->update(['payment_id' => $payment->id]);
 
-            // Create notification for admins - use correct notification type
-            Notification::createPaymentNotification($payment->id, 'payment_pending');
+            // ✅ IMPROVED: Create notification with error handling
+            if (class_exists('\App\Models\Notification')) {
+                try {
+                    Notification::createPaymentNotification($payment->id, 'payment_pending');
+                } catch (\Exception $e) {
+                    // Log notification error but don't fail the payment
+                    Log::warning('Failed to create payment notification', [
+                        'payment_id' => $payment->id,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
 
             Log::info('Payment submitted', [
                 'payment_id' => $payment->id,
@@ -185,7 +193,7 @@ class PaymentController extends Controller
     }
 
     /**
-     * Update payment information
+     * ✅ UPDATED: Update payment information dengan ShopeePay validation
      */
     public function update(Request $request, Payment $payment)
     {
@@ -202,13 +210,13 @@ class PaymentController extends Controller
                     ->with('error', 'Pembayaran tidak dapat diperbarui pada status saat ini.');
             }
 
-            // Validation
+            // ✅ UPDATED: Validation rules untuk ShopeePay dan e-wallet
             $request->validate([
-                'payment_method' => ['required', 'in:transfer_bank,dana,gopay,ovo'],
+                'payment_method' => ['required', 'in:shopeepay,dana,gopay,ovo'],
                 'payment_proof' => ['nullable', 'image', 'max:5120'],
                 'payment_details' => ['nullable', 'array'],
-                'payment_details.sender_name' => ['required_if:payment_method,transfer_bank', 'string', 'max:255'],
-                'payment_details.sender_account' => ['required_if:payment_method,transfer_bank', 'string', 'max:255'],
+                'payment_details.sender_name' => ['nullable', 'string', 'max:255'],
+                'payment_details.sender_account' => ['nullable', 'string', 'max:255'],
                 'payment_details.transaction_id' => ['nullable', 'string', 'max:255'],
             ]);
 
@@ -232,8 +240,17 @@ class PaymentController extends Controller
                 'confirmed_at' => null,
             ]);
 
-            // Create notification for admin about resubmission
-            Notification::createPaymentNotification($payment->id, 'payment_pending');
+            // ✅ IMPROVED: Create notification with error handling
+            if (class_exists('\App\Models\Notification')) {
+                try {
+                    Notification::createPaymentNotification($payment->id, 'payment_pending');
+                } catch (\Exception $e) {
+                    Log::warning('Failed to create payment notification', [
+                        'payment_id' => $payment->id,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
 
             return redirect()
                 ->route('payments.show', $payment)

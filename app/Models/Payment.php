@@ -93,10 +93,13 @@ class Payment extends Model
         return $icons[$this->status] ?? '💰';
     }
 
+    /**
+     * ✅ UPDATED: Payment method display untuk ShopeePay dan e-wallet lainnya
+     */
     public function getPaymentMethodDisplayAttribute()
     {
         $methods = [
-            'transfer_bank' => 'Transfer Bank',
+            'shopeepay' => 'ShopeePay',
             'dana' => 'DANA',
             'gopay' => 'GoPay',
             'ovo' => 'OVO',
@@ -129,15 +132,15 @@ class Payment extends Model
     }
 
     /**
-     * ✅ ADDED: Additional accessors for better UI support
+     * ✅ UPDATED: Method icon untuk ShopeePay dan e-wallet
      */
     public function getMethodIconAttribute()
     {
         $icons = [
-            'transfer_bank' => 'fas fa-university',
+            'shopeepay' => 'fas fa-shopping-bag',
             'dana' => 'fas fa-mobile-alt',
-            'gopay' => 'fas fa-mobile-alt',
-            'ovo' => 'fas fa-mobile-alt',
+            'gopay' => 'fas fa-motorcycle',
+            'ovo' => 'fas fa-wallet',
         ];
 
         return $icons[$this->payment_method] ?? 'fas fa-credit-card';
@@ -204,48 +207,62 @@ class Payment extends Model
         return $query->whereDate('created_at', today());
     }
 
-    public function scopeThisWeek($query)
+    /**
+     * ✅ UPDATED: Payment methods dengan ShopeePay dan nomor 082144715831
+     */
+    public static function getPaymentMethods()
     {
-        return $query->whereBetween('created_at', [now()->startOfWeek(), now()->endOfWeek()]);
-    }
-
-    public function scopeThisMonth($query)
-    {
-        return $query->whereMonth('created_at', now()->month)
-                     ->whereYear('created_at', now()->year);
-    }
-
-    public function scopeThisYear($query)
-    {
-        return $query->whereYear('created_at', now()->year);
-    }
-
-    public function scopeWithProof($query)
-    {
-        return $query->whereNotNull('payment_proof_path');
-    }
-
-    public function scopeWithoutProof($query)
-    {
-        return $query->whereNull('payment_proof_path');
+        return [
+            'shopeepay' => [
+                'name' => 'ShopeePay',
+                'details' => 'Transfer ke ShopeePay 082144715831',
+                'icon' => 'fas fa-shopping-bag',
+                'phone' => '082144715831'
+            ],
+            'dana' => [
+                'name' => 'DANA',
+                'details' => 'Transfer ke DANA 082144715831',
+                'icon' => 'fas fa-mobile-alt',
+                'phone' => '082144715831'
+            ],
+            'gopay' => [
+                'name' => 'GoPay',
+                'details' => 'Transfer ke GoPay 082144715831',
+                'icon' => 'fas fa-motorcycle',
+                'phone' => '082144715831'
+            ],
+            'ovo' => [
+                'name' => 'OVO',
+                'details' => 'Transfer ke OVO 082144715831',
+                'icon' => 'fas fa-wallet',
+                'phone' => '082144715831'
+            ]
+        ];
     }
 
     /**
-     * Status Check Methods
+     * ✅ HELPER: Get payment method details by key
      */
-    public function isPending()
+    public static function getPaymentMethodDetails($methodKey)
     {
-        return $this->status === 'pending';
+        $methods = static::getPaymentMethods();
+        return $methods[$methodKey] ?? null;
     }
 
-    public function isConfirmed()
+    /**
+     * ✅ HELPER: Get available payment method keys
+     */
+    public static function getAvailablePaymentMethods()
     {
-        return $this->status === 'confirmed';
+        return array_keys(static::getPaymentMethods());
     }
 
-    public function isRejected()
+    /**
+     * ✅ VALIDATION: Check if payment method is valid
+     */
+    public static function isValidPaymentMethod($method)
     {
-        return $this->status === 'rejected';
+        return in_array($method, static::getAvailablePaymentMethods());
     }
 
     /**
@@ -256,349 +273,154 @@ class Payment extends Model
         return $this->status === 'pending';
     }
 
-    /**
-     * ✅ ENHANCED: Updated canBeRejected() method 
-     */
     public function canBeRejected()
-    {
-        return in_array($this->status, ['pending', 'confirmed']);
-    }
-
-    /**
-     * ✅ ADDED: Additional validation methods
-     */
-    public function canBeEdited()
-    {
-        return $this->status === 'rejected';
-    }
-
-    public function canBeDeleted()
-    {
-        return in_array($this->status, ['pending', 'rejected']);
-    }
-
-    public function requiresAction()
     {
         return $this->status === 'pending';
     }
 
-    /**
-     * ✅ ENHANCED: Improved confirm method with better notification handling
-     */
-    public function confirm($adminId)
+    public function canBeUpdated()
     {
+        return $this->status === 'rejected';
+    }
+
+    /**
+     * ✅ ADDED: Missing isConfirmed() method and other status check methods
+     */
+    public function isConfirmed()
+    {
+        return $this->status === 'confirmed';
+    }
+
+    /**
+     * ✅ ADDITIONAL HELPER METHODS: Status checking methods
+     */
+    public function isPending()
+    {
+        return $this->status === 'pending';
+    }
+
+    public function isRejected()
+    {
+        return $this->status === 'rejected';
+    }
+
+    /**
+     * ✅ ENHANCED: Check if payment has been processed (confirmed or rejected)
+     */
+    public function isProcessed()
+    {
+        return in_array($this->status, ['confirmed', 'rejected']);
+    }
+
+    /**
+     * ✅ ENHANCED: Check if payment is waiting for action
+     */
+    public function isWaiting()
+    {
+        return $this->status === 'pending';
+    }
+
+    public function confirm($adminId = null)
+    {
+        if (!$this->canBeConfirmed()) {
+            throw new \Exception('Payment cannot be confirmed');
+        }
+
         $this->update([
             'status' => 'confirmed',
             'confirmed_by' => $adminId,
             'confirmed_at' => now(),
-            'rejection_reason' => null,
         ]);
 
-        // Update submission status
+        // Update submission status if payment is confirmed
         if ($this->submission) {
-            $this->submission->markAsPaid($this->id);
+            $this->submission->update(['status' => 'pending_approval']);
         }
 
         // Create notification for user
         if (class_exists('\App\Models\Notification')) {
-            \App\Models\Notification::createForUser(
-                $this->user_id,
-                'Pembayaran Dikonfirmasi',
-                "Pembayaran sebesar {$this->formatted_amount} telah dikonfirmasi. Konten Anda sedang dalam proses review.",
-                'payment_confirmed',
-                ['payment_id' => $this->id]
-            );
+            \App\Models\Notification::createPaymentNotification($this->id, 'payment_confirmed');
         }
 
         return $this;
     }
 
-    /**
-     * ✅ ENHANCED: Improved reject method with better parameters
-     */
     public function reject($reason, $adminId = null)
     {
+        if (!$this->canBeRejected()) {
+            throw new \Exception('Payment cannot be rejected');
+        }
+
         $this->update([
             'status' => 'rejected',
+            'rejection_reason' => $reason,
             'confirmed_by' => $adminId,
             'confirmed_at' => now(),
-            'rejection_reason' => $reason,
         ]);
-
-        // Update submission status back to pending payment
-        if ($this->submission) {
-            $this->submission->update([
-                'status' => 'pending_payment',
-                'payment_id' => null,
-                'submitted_at' => null,
-            ]);
-        }
 
         // Create notification for user
         if (class_exists('\App\Models\Notification')) {
-            \App\Models\Notification::createForUser(
-                $this->user_id,
-                'Pembayaran Ditolak',
-                "Pembayaran sebesar {$this->formatted_amount} ditolak. Alasan: {$reason}",
-                'payment_rejected',
-                ['payment_id' => $this->id]
-            );
+            \App\Models\Notification::createPaymentNotification($this->id, 'payment_rejected');
         }
 
         return $this;
     }
 
     /**
-     * ✅ ENHANCED: Method to reset payment for resubmission
-     */
-    public function resetForResubmission()
-    {
-        // Delete old proof file if exists
-        $this->deleteProof();
-        
-        // Reset payment status
-        $this->update([
-            'status' => 'pending',
-            'confirmed_by' => null,
-            'confirmed_at' => null,
-            'rejection_reason' => null,
-            'payment_proof_path' => null,
-            'payment_details' => null,
-        ]);
-        
-        return $this;
-    }
-
-    /**
-     * File Management Methods
+     * ✅ ADDED: File management methods
      */
     public function deleteProof()
     {
         if ($this->payment_proof_path && Storage::disk('public')->exists($this->payment_proof_path)) {
             Storage::disk('public')->delete($this->payment_proof_path);
         }
-        
-        $this->update(['payment_proof_path' => null]);
-        
-        return $this;
     }
 
-    /**
-     * ✅ ENHANCED: Check if payment has valid proof file
-     */
-    public function hasValidProof()
-    {
-        if (!$this->payment_proof_path) {
-            return false;
-        }
-
-        return Storage::disk('public')->exists($this->payment_proof_path);
-    }
-
-    /**
-     * ✅ ENHANCED: Get file size of payment proof
-     */
     public function getProofFileSize()
     {
-        if (!$this->hasValidProof()) {
+        if (!$this->payment_proof_path) {
             return 0;
         }
 
-        return Storage::disk('public')->size($this->payment_proof_path);
+        if (Storage::disk('public')->exists($this->payment_proof_path)) {
+            return Storage::disk('public')->size($this->payment_proof_path);
+        }
+
+        return 0;
+    }
+
+    public function hasProof()
+    {
+        return !empty($this->payment_proof_path) && 
+               Storage::disk('public')->exists($this->payment_proof_path);
     }
 
     /**
-     * ✅ ADDED: Validate payment proof file
-     */
-    public function validateProofFile()
-    {
-        $errors = [];
-
-        if (!$this->payment_proof_path) {
-            $errors[] = 'Bukti pembayaran wajib diunggah.';
-            return $errors;
-        }
-
-        if (!$this->hasValidProof()) {
-            $errors[] = 'File bukti pembayaran tidak ditemukan atau rusak.';
-            return $errors;
-        }
-
-        // Check file size (max 5MB)
-        $maxSize = 5 * 1024 * 1024; // 5MB
-        if ($this->getProofFileSize() > $maxSize) {
-            $errors[] = 'Ukuran file bukti pembayaran terlalu besar. Maksimal 5MB.';
-        }
-
-        return $errors;
-    }
-
-    /**
-     * ✅ ADDED: Payment validation methods
-     */
-    public function validateForConfirmation()
-    {
-        $errors = [];
-
-        if (!$this->canBeConfirmed()) {
-            $errors[] = 'Pembayaran tidak dapat dikonfirmasi pada status saat ini.';
-        }
-
-        if (!$this->hasValidProof()) {
-            $errors[] = 'Bukti pembayaran tidak valid atau tidak ditemukan.';
-        }
-
-        if (!$this->submission) {
-            $errors[] = 'Submission terkait tidak ditemukan.';
-        }
-
-        return $errors;
-    }
-
-    public function isValid()
-    {
-        return empty($this->validateForConfirmation());
-    }
-
-    /**
-     * ✅ ENHANCED: Static methods with better functionality
-     */
-    public static function getPaymentMethods()
-    {
-        return [
-            'transfer_bank' => [
-                'name' => 'Transfer Bank',
-                'description' => 'Transfer ke rekening bank IMU',
-                'icon' => 'fas fa-university',
-                'details' => [
-                    'bank' => 'Bank BCA',
-                    'account_number' => '1234567890',
-                    'account_name' => 'IMU - Universitas Udayana'
-                ]
-            ],
-            'dana' => [
-                'name' => 'DANA',
-                'description' => 'Transfer melalui aplikasi DANA',
-                'icon' => 'fas fa-mobile-alt',
-                'details' => [
-                    'phone' => '08123456789',
-                    'name' => 'IMU Udayana'
-                ]
-            ],
-            'gopay' => [
-                'name' => 'GoPay',
-                'description' => 'Transfer melalui aplikasi Gojek',
-                'icon' => 'fas fa-mobile-alt',
-                'details' => [
-                    'phone' => '08123456789',
-                    'name' => 'IMU Udayana'
-                ]
-            ],
-            'ovo' => [
-                'name' => 'OVO',
-                'description' => 'Transfer melalui aplikasi OVO',
-                'icon' => 'fas fa-mobile-alt',
-                'details' => [
-                    'phone' => '08123456789',
-                    'name' => 'IMU Udayana'
-                ]
-            ]
-        ];
-    }
-
-    public static function getStatusOptions()
-    {
-        return [
-            'pending' => 'Menunggu Konfirmasi',
-            'confirmed' => 'Dikonfirmasi',
-            'rejected' => 'Ditolak',
-        ];
-    }
-
-    /**
-     * ✅ ENHANCED: Revenue calculation with date filtering
-     */
-    public static function getRevenue($startDate = null, $endDate = null)
-    {
-        $query = static::confirmed();
-        
-        if ($startDate) {
-            $query->whereDate('confirmed_at', '>=', $startDate);
-        }
-        
-        if ($endDate) {
-            $query->whereDate('confirmed_at', '<=', $endDate);
-        }
-        
-        return $query->sum('amount') ?? 0;
-    }
-
-    /**
-     * ✅ ENHANCED: Comprehensive admin statistics (required by ContentSubmissionController)
+     * ✅ ADDED: Statistics and reporting methods
      */
     public static function getAdminStats()
     {
-        $stats = [
-            'total' => 0,
-            'pending' => 0,
-            'confirmed' => 0,
-            'rejected' => 0,
-            'total_revenue' => 0,
-            'today_revenue' => 0,
-            'this_week_revenue' => 0,
-            'this_month_revenue' => 0,
-            'today_count' => 0,
-            'this_week_count' => 0,
-            'this_month_count' => 0,
+        return [
+            'total' => static::count(),
+            'pending' => static::pending()->count(),
+            'confirmed' => static::confirmed()->count(),
+            'rejected' => static::rejected()->count(),
+            'total_revenue' => static::confirmed()->sum('amount') ?? 0,
+            'pending_amount' => static::pending()->sum('amount') ?? 0,
+            'today' => static::today()->count(),
+            'this_week' => static::where('created_at', '>=', now()->startOfWeek())->count(),
+            'this_month' => static::whereMonth('created_at', now()->month)->count(),
         ];
-
-        // Status counts
-        $payments = static::select('status', DB::raw('count(*) as count'), DB::raw('sum(amount) as revenue'))
-                          ->groupBy('status')
-                          ->get();
-
-        foreach ($payments as $payment) {
-            $stats[$payment->status] = $payment->count;
-            $stats['total'] += $payment->count;
-            
-            if ($payment->status === 'confirmed') {
-                $stats['total_revenue'] = $payment->revenue ?? 0;
-            }
-        }
-
-        // Time-based revenue
-        $stats['today_revenue'] = static::confirmed()
-                                       ->whereDate('confirmed_at', today())
-                                       ->sum('amount') ?? 0;
-
-        $stats['this_week_revenue'] = static::confirmed()
-                                           ->whereBetween('confirmed_at', [now()->startOfWeek(), now()->endOfWeek()])
-                                           ->sum('amount') ?? 0;
-
-        $stats['this_month_revenue'] = static::confirmed()
-                                            ->whereMonth('confirmed_at', now()->month)
-                                            ->whereYear('confirmed_at', now()->year)
-                                            ->sum('amount') ?? 0;
-
-        // Time-based counts
-        $stats['today_count'] = static::whereDate('created_at', today())->count();
-        $stats['this_week_count'] = static::thisWeek()->count();
-        $stats['this_month_count'] = static::thisMonth()->count();
-
-        return $stats;
     }
 
-    /**
-     * ✅ ENHANCED: Get payment statistics for specific user
-     */
     public static function getUserStats($userId)
     {
         return [
             'total_payments' => static::where('user_id', $userId)->count(),
-            'pending_payments' => static::where('user_id', $userId)->pending()->count(),
             'confirmed_payments' => static::where('user_id', $userId)->confirmed()->count(),
+            'pending_payments' => static::where('user_id', $userId)->pending()->count(),
             'rejected_payments' => static::where('user_id', $userId)->rejected()->count(),
-            'total_amount_paid' => static::where('user_id', $userId)->confirmed()->sum('amount') ?? 0,
+            'total_spent' => static::where('user_id', $userId)->confirmed()->sum('amount') ?? 0,
             'latest_payment' => static::where('user_id', $userId)->latest()->first(),
         ];
     }
@@ -757,14 +579,27 @@ class Payment extends Model
             'user_name' => $this->user->full_name ?? 'Unknown',
             'user_email' => $this->user->email ?? 'Unknown',
             'submission_title' => $this->submission->title ?? 'Unknown',
+            'category' => $this->submission->category->name ?? 'Unknown',
             'amount' => $this->amount,
             'formatted_amount' => $this->formatted_amount,
             'payment_method' => $this->payment_method_display,
             'status' => $this->status_display,
-            'confirmed_by' => $this->confirmedBy->full_name ?? null,
-            'confirmed_at' => $this->confirmed_at?->format('Y-m-d H:i:s'),
-            'rejection_reason' => $this->rejection_reason,
             'created_at' => $this->created_at->format('Y-m-d H:i:s'),
+            'confirmed_at' => $this->confirmed_at ? $this->confirmed_at->format('Y-m-d H:i:s') : null,
+            'rejection_reason' => $this->rejection_reason,
         ];
+    }
+
+    /**
+     * ✅ ADDED: Delete method with cleanup
+     */
+    protected static function boot()
+    {
+        parent::boot();
+
+        static::deleting(function ($payment) {
+            // Delete payment proof file when payment is deleted
+            $payment->deleteProof();
+        });
     }
 }
