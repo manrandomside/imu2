@@ -21,7 +21,7 @@ class RoleMiddleware
         // Check if user is authenticated
         if (!Auth::check()) {
             Log::warning('Unauthenticated access attempt to role-protected route', [
-                'route' => $request->route()->getName(),
+                'route' => $request->route() ? $request->route()->getName() : 'unknown',
                 'ip' => $request->ip(),
                 'user_agent' => $request->userAgent()
             ]);
@@ -50,7 +50,7 @@ class RoleMiddleware
                 'user_id' => $user->id,
                 'user_role' => $user->role,
                 'required_roles' => $allowedRoles,
-                'route' => $request->route()->getName(),
+                'route' => $request->route() ? $request->route()->getName() : 'unknown',
                 'ip' => $request->ip()
             ]);
 
@@ -70,7 +70,7 @@ class RoleMiddleware
         Log::info('Role-based access granted', [
             'user_id' => $user->id,
             'user_role' => $user->role,
-            'route' => $request->route()->getName()
+            'route' => $request->route() ? $request->route()->getName() : 'unknown'
         ]);
 
         return $next($request);
@@ -86,6 +86,7 @@ class RoleMiddleware
             'moderator' => 'Moderator',
             'mahasiswa' => 'Mahasiswa',
             'alumni' => 'Alumni',
+            'student' => 'Mahasiswa',
             'tenaga_pendidik' => 'Tenaga Pendidik'
         ];
 
@@ -103,116 +104,3 @@ class RoleMiddleware
         }
     }
 }
-
-// ===============================================
-// ✅ ADDITIONAL MIDDLEWARE: AdminOnly
-// ===============================================
-
-class AdminOnlyMiddleware
-{
-    /**
-     * Handle admin-only access
-     */
-    public function handle(Request $request, Closure $next): Response
-    {
-        if (!Auth::check()) {
-            if ($request->expectsJson()) {
-                return response()->json(['status' => 'error', 'message' => 'Authentication required'], 401);
-            }
-            return redirect()->route('login');
-        }
-
-        $user = Auth::user();
-
-        if (!$user->isAdmin()) {
-            Log::warning('Admin-only access denied', [
-                'user_id' => $user->id,
-                'user_role' => $user->role,
-                'route' => $request->route()->getName(),
-                'ip' => $request->ip()
-            ]);
-
-            if ($request->expectsJson()) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'Administrator access required'
-                ], 403);
-            }
-
-            return redirect()->route('home')->with('error', 'Akses ditolak. Halaman ini hanya untuk Administrator.');
-        }
-
-        return $next($request);
-    }
-}
-
-// ===============================================
-// ✅ ADDITIONAL MIDDLEWARE: ModeratorOrAdmin
-// ===============================================
-
-class ModeratorOrAdminMiddleware
-{
-    /**
-     * Handle moderator or admin access
-     */
-    public function handle(Request $request, Closure $next): Response
-    {
-        if (!Auth::check()) {
-            if ($request->expectsJson()) {
-                return response()->json(['status' => 'error', 'message' => 'Authentication required'], 401);
-            }
-            return redirect()->route('login');
-        }
-
-        $user = Auth::user();
-
-        if (!$user->hasModeratorPrivileges()) {
-            Log::warning('Moderator/Admin access denied', [
-                'user_id' => $user->id,
-                'user_role' => $user->role,
-                'route' => $request->route()->getName(),
-                'ip' => $request->ip()
-            ]);
-
-            if ($request->expectsJson()) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'Moderator or Administrator access required'
-                ], 403);
-            }
-
-            return redirect()->route('home')->with('error', 'Akses ditolak. Halaman ini hanya untuk Moderator atau Administrator.');
-        }
-
-        return $next($request);
-    }
-}
-
-// ===============================================
-// ✅ MIDDLEWARE REGISTRATION for app/Http/Kernel.php
-// ===============================================
-
-/*
-Add these to your app/Http/Kernel.php in the $middlewareAliases array:
-
-'role' => \App\Http\Middleware\RoleMiddleware::class,
-'admin' => \App\Http\Middleware\AdminOnlyMiddleware::class,
-'moderator' => \App\Http\Middleware\ModeratorOrAdminMiddleware::class,
-
-Usage examples in routes:
-Route::middleware(['auth', 'role:admin'])->group(function () {
-    // Admin only routes
-});
-
-Route::middleware(['auth', 'role:moderator,admin'])->group(function () {
-    // Moderator or Admin routes
-});
-
-Route::middleware(['auth', 'admin'])->group(function () {
-    // Admin only (shorthand)
-});
-
-Route::middleware(['auth', 'moderator'])->group(function () {
-    // Moderator or Admin (shorthand)
-});
-*/
