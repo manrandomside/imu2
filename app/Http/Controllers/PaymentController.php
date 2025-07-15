@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\ValidationException;
 use App\Models\Payment;
 use App\Models\ContentSubmission;
@@ -375,39 +376,79 @@ class PaymentController extends Controller
     }
 
     /**
-     * Confirm payment
+     * ✅ ENHANCED: Confirm payment - support JSON response untuk dashboard admin
      */
     public function confirm(Payment $payment)
     {
         $user = Auth::user();
         
         if (!$user->hasModeratorPrivileges()) {
+            if (request()->expectsJson()) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+            }
             abort(403, 'Unauthorized access');
         }
 
         if (!$payment->canBeConfirmed()) {
-            return back()->with('error', 'Pembayaran tidak dapat dikonfirmasi pada status saat ini.');
+            $message = 'Pembayaran tidak dapat dikonfirmasi pada status saat ini.';
+            if (request()->expectsJson()) {
+                return response()->json(['success' => false, 'message' => $message]);
+            }
+            return back()->with('error', $message);
         }
 
-        $payment->confirm($user->id);
+        try {
+            $payment->confirm($user->id);
 
-        Log::info('Payment confirmed', [
-            'payment_id' => $payment->id,
-            'confirmed_by' => $user->id,
-            'submission_id' => $payment->submission_id
-        ]);
+            Log::info('Payment confirmed', [
+                'payment_id' => $payment->id,
+                'confirmed_by' => $user->id,
+                'submission_id' => $payment->submission_id
+            ]);
 
-        return back()->with('success', 'Pembayaran berhasil dikonfirmasi!');
+            // Clear relevant cache
+            Cache::forget('admin_integrated_stats_' . $user->id);
+            Cache::forget('admin_pending_payments_' . $user->id);
+
+            $message = 'Pembayaran berhasil dikonfirmasi!';
+            if (request()->expectsJson()) {
+                return response()->json([
+                    'success' => true, 
+                    'message' => $message,
+                    'payment' => [
+                        'id' => $payment->id,
+                        'status' => $payment->status,
+                        'confirmed_at' => $payment->updated_at
+                    ]
+                ]);
+            }
+            return back()->with('success', $message);
+
+        } catch (\Exception $e) {
+            Log::error('Error confirming payment', [
+                'payment_id' => $payment->id,
+                'error' => $e->getMessage()
+            ]);
+
+            $message = 'Terjadi kesalahan saat mengkonfirmasi pembayaran.';
+            if (request()->expectsJson()) {
+                return response()->json(['success' => false, 'message' => $message], 500);
+            }
+            return back()->with('error', $message);
+        }
     }
 
     /**
-     * Reject payment
+     * ✅ ENHANCED: Reject payment - support JSON response untuk dashboard admin
      */
     public function reject(Request $request, Payment $payment)
     {
         $user = Auth::user();
         
         if (!$user->hasModeratorPrivileges()) {
+            if (request()->expectsJson()) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+            }
             abort(403, 'Unauthorized access');
         }
 
@@ -420,18 +461,52 @@ class PaymentController extends Controller
         ]);
 
         if (!$payment->canBeRejected()) {
-            return back()->with('error', 'Pembayaran tidak dapat ditolak pada status saat ini.');
+            $message = 'Pembayaran tidak dapat ditolak pada status saat ini.';
+            if (request()->expectsJson()) {
+                return response()->json(['success' => false, 'message' => $message]);
+            }
+            return back()->with('error', $message);
         }
 
-        $payment->reject($request->rejection_reason, $user->id);
+        try {
+            $payment->reject($request->rejection_reason, $user->id);
 
-        Log::info('Payment rejected', [
-            'payment_id' => $payment->id,
-            'rejected_by' => $user->id,
-            'reason' => $request->rejection_reason
-        ]);
+            Log::info('Payment rejected', [
+                'payment_id' => $payment->id,
+                'rejected_by' => $user->id,
+                'reason' => $request->rejection_reason
+            ]);
 
-        return back()->with('success', 'Pembayaran telah ditolak.');
+            // Clear relevant cache
+            Cache::forget('admin_integrated_stats_' . $user->id);
+            Cache::forget('admin_pending_payments_' . $user->id);
+
+            $message = 'Pembayaran berhasil ditolak.';
+            if (request()->expectsJson()) {
+                return response()->json([
+                    'success' => true, 
+                    'message' => $message,
+                    'payment' => [
+                        'id' => $payment->id,
+                        'status' => $payment->status,
+                        'rejection_reason' => $payment->rejection_reason
+                    ]
+                ]);
+            }
+            return back()->with('success', $message);
+
+        } catch (\Exception $e) {
+            Log::error('Error rejecting payment', [
+                'payment_id' => $payment->id,
+                'error' => $e->getMessage()
+            ]);
+
+            $message = 'Terjadi kesalahan saat menolak pembayaran.';
+            if (request()->expectsJson()) {
+                return response()->json(['success' => false, 'message' => $message], 500);
+            }
+            return back()->with('error', $message);
+        }
     }
 
     /**
@@ -485,6 +560,10 @@ class PaymentController extends Controller
                 $successCount++;
             }
         }
+
+        // Clear relevant cache
+        Cache::forget('admin_integrated_stats_' . $user->id);
+        Cache::forget('admin_pending_payments_' . $user->id);
 
         $actionText = $action === 'confirm' ? 'dikonfirmasi' : 'ditolak';
         

@@ -6,6 +6,8 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
 
 class ContentSubmission extends Model
 {
@@ -25,12 +27,18 @@ class ContentSubmission extends Model
         'submitted_at',
         'approved_at',
         'approved_by',
+        'published_at',      // ✅ ADDED
+        'published_by',      // ✅ ADDED
+        'rejected_at',       // ✅ ADDED
+        'rejected_by',       // ✅ ADDED
         'rejection_reason',
     ];
 
     protected $casts = [
         'submitted_at' => 'datetime',
         'approved_at' => 'datetime',
+        'published_at' => 'datetime',   // ✅ ADDED
+        'rejected_at' => 'datetime',    // ✅ ADDED
     ];
 
     /**
@@ -54,6 +62,19 @@ class ContentSubmission extends Model
     public function approvedBy()
     {
         return $this->belongsTo(User::class, 'approved_by');
+    }
+
+    /**
+     * ✅ ADDED: New relationships untuk tracking
+     */
+    public function publishedBy()
+    {
+        return $this->belongsTo(User::class, 'published_by');
+    }
+
+    public function rejectedBy()
+    {
+        return $this->belongsTo(User::class, 'rejected_by');
     }
 
     /**
@@ -157,6 +178,51 @@ class ContentSubmission extends Model
     }
 
     /**
+     * ✅ ADDED: Status progress tracking untuk dashboard
+     */
+    public function getProgressPercentageAttribute()
+    {
+        $percentages = [
+            'pending_payment' => 20,
+            'pending_approval' => 40,
+            'approved' => 80,
+            'published' => 100,
+            'rejected' => 100,
+        ];
+
+        return $percentages[$this->status] ?? 0;
+    }
+
+    public function getProgressStepsAttribute()
+    {
+        $currentStep = 0;
+        switch ($this->status) {
+            case 'pending_payment':
+                $currentStep = 1;
+                break;
+            case 'pending_approval':
+                $currentStep = 2;
+                break;
+            case 'approved':
+                $currentStep = 3;
+                break;
+            case 'published':
+                $currentStep = 4;
+                break;
+            case 'rejected':
+                $currentStep = 0; // Special case
+                break;
+        }
+
+        return [
+            ['title' => 'Payment', 'completed' => $currentStep >= 1],
+            ['title' => 'Review', 'completed' => $currentStep >= 2],
+            ['title' => 'Approve', 'completed' => $currentStep >= 3],
+            ['title' => 'Publish', 'completed' => $currentStep >= 4],
+        ];
+    }
+
+    /**
      * Scopes
      */
     public function scopePendingPayment($query)
@@ -251,7 +317,7 @@ class ContentSubmission extends Model
     }
 
     /**
-     * ✅ UPDATED: Enhanced canBeApproved() method with payment validation
+     * ✅ ENHANCED: canBeApproved() method dengan validation yang lebih ketat
      */
     public function canBeApproved()
     {
@@ -261,13 +327,16 @@ class ContentSubmission extends Model
     }
 
     /**
-     * ✅ ADDED: New validation methods
+     * ✅ ENHANCED: New validation methods
      */
     public function canBeRejected()
     {
         return in_array($this->status, ['pending_approval', 'approved']);
     }
 
+    /**
+     * ✅ ENHANCED: canBePublished() method
+     */
     public function canBePublished()
     {
         return $this->status === 'approved';
@@ -316,79 +385,133 @@ class ContentSubmission extends Model
 
         // Create notification for admin (if Notification model exists)
         if (class_exists('\App\Models\Notification')) {
-            \App\Models\Notification::createForUser(
-                1, // Admin user ID - you might want to get this dynamically
-                'Submission Pending Approval',
-                "New submission '{$this->title}' is pending approval.",
-                'submission_pending_approval',
-                ['submission_id' => $this->id]
-            );
+            try {
+                \App\Models\Notification::createSubmissionNotification($this->id, 'submission_pending_approval');
+            } catch (\Exception $e) {
+                Log::warning('Failed to create pending approval notification', [
+                    'submission_id' => $this->id,
+                    'error' => $e->getMessage()
+                ]);
+            }
         }
 
         return $this;
     }
 
     /**
-     * ✅ UPDATED: Enhanced approve method with better notification handling
+     * ✅ ENHANCED: approve() method compatible dengan controller yang sudah diupdate
      */
-    public function approve($adminId, $shouldPublish = false)
+    public function approve($approvedBy)
     {
-        $status = $shouldPublish ? 'published' : 'approved';
-        
-        $this->update([
-            'status' => $status,
-            'approved_at' => now(),
-            'approved_by' => $adminId,
-            'rejection_reason' => null,
-        ]);
-
-        // Create notification for user
-        if (class_exists('\App\Models\Notification')) {
-            $message = $shouldPublish 
-                ? "Konten '{$this->title}' telah disetujui dan dipublikasikan."
-                : "Konten '{$this->title}' telah disetujui.";
-                
-            \App\Models\Notification::createForUser(
-                $this->user_id,
-                'Konten Disetujui',
-                $message,
-                $shouldPublish ? 'submission_published' : 'submission_approved',
-                ['submission_id' => $this->id]
-            );
+        if (!$this->canBeApproved()) {
+            throw new \Exception('Submission cannot be approved in current status: ' . $this->status);
         }
 
-        // If published, create the actual group message
-        if ($shouldPublish) {
-            $this->publishToGroup();
-        }
+        try {
+            $this->update([
+                'status' => 'approved',
+                'approved_at' => now(),
+                'approved_by' => $approvedBy,
+                'rejection_reason' => null,
+                'rejected_at' => null,
+                'rejected_by' => null,
+            ]);
 
-        return $this;
+            // Clear admin cache
+            if ($approvedBy) {
+                Cache::forget('admin_pending_submissions_' . $approvedBy);
+                Cache::forget('admin_integrated_stats_' . $approvedBy);
+            }
+
+            // Create notification for user
+            if (class_exists('\App\Models\Notification')) {
+                try {
+                    \App\Models\Notification::createSubmissionNotification($this->id, 'submission_approved');
+                } catch (\Exception $e) {
+                    Log::warning('Failed to create approval notification', [
+                        'submission_id' => $this->id,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            Log::info('Submission approved successfully', [
+                'submission_id' => $this->id,
+                'approved_by' => $approvedBy,
+                'title' => $this->title
+            ]);
+
+            return true;
+
+        } catch (\Exception $e) {
+            Log::error('Failed to approve submission', [
+                'submission_id' => $this->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            throw new \Exception('Failed to approve submission: ' . $e->getMessage());
+        }
     }
 
     /**
-     * ✅ UPDATED: Enhanced reject method
+     * ✅ ENHANCED: reject() method dengan better tracking
      */
-    public function reject($reason, $adminId = null)
+    public function reject($reason, $rejectedBy = null)
     {
-        $this->update([
-            'status' => 'rejected',
-            'approved_by' => $adminId,
-            'approved_at' => null,
-            'rejection_reason' => $reason,
-        ]);
-
-        // Create notification for user
-        if (class_exists('\App\Models\Notification')) {
-            \App\Models\Notification::createForUser(
-                $this->user_id,
-                'Konten Ditolak',
-                "Konten '{$this->title}' ditolak. Alasan: {$reason}",
-                'submission_rejected',
-                ['submission_id' => $this->id]
-            );
+        if (!$this->canBeRejected()) {
+            throw new \Exception('Submission cannot be rejected in current status: ' . $this->status);
         }
 
-        return $this;
+        if (empty($reason)) {
+            throw new \Exception('Rejection reason is required');
+        }
+
+        try {
+            $this->update([
+                'status' => 'rejected',
+                'approved_by' => null,
+                'approved_at' => null,
+                'rejected_by' => $rejectedBy,
+                'rejected_at' => now(),
+                'rejection_reason' => $reason,
+            ]);
+
+            // Clear admin cache
+            if ($rejectedBy) {
+                Cache::forget('admin_pending_submissions_' . $rejectedBy);
+                Cache::forget('admin_integrated_stats_' . $rejectedBy);
+            }
+
+            // Create notification for user
+            if (class_exists('\App\Models\Notification')) {
+                try {
+                    \App\Models\Notification::createSubmissionNotification($this->id, 'submission_rejected');
+                } catch (\Exception $e) {
+                    Log::warning('Failed to create rejection notification', [
+                        'submission_id' => $this->id,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            Log::info('Submission rejected successfully', [
+                'submission_id' => $this->id,
+                'rejected_by' => $rejectedBy,
+                'reason' => $reason
+            ]);
+
+            return true;
+
+        } catch (\Exception $e) {
+            Log::error('Failed to reject submission', [
+                'submission_id' => $this->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            throw new \Exception('Failed to reject submission: ' . $e->getMessage());
+        }
     }
 
     /**
@@ -409,67 +532,118 @@ class ContentSubmission extends Model
     }
 
     /**
-     * ✅ ADDED: New method to publish content
+     * ✅ ENHANCED: publish() method compatible dengan controller yang sudah diupdate
      */
-    public function publish()
+    public function publish($publishedBy = null)
     {
-        if ($this->status !== 'approved') {
-            throw new \Exception('Konten harus disetujui terlebih dahulu sebelum dipublikasikan.');
+        if (!$this->canBePublished()) {
+            throw new \Exception('Submission cannot be published in current status: ' . $this->status);
         }
 
-        $this->update(['status' => 'published']);
+        try {
+            // Publish to group first
+            $publishResult = $this->publishToGroup();
+            
+            if ($publishResult) {
+                $this->update([
+                    'status' => 'published',
+                    'published_by' => $publishedBy,
+                    'published_at' => now()
+                ]);
 
-        // Create notification for user
-        if (class_exists('\App\Models\Notification')) {
-            \App\Models\Notification::createForUser(
-                $this->user_id,
-                'Konten Dipublikasikan',
-                "Konten '{$this->title}' telah dipublikasikan di komunitas.",
-                'submission_published',
-                ['submission_id' => $this->id]
-            );
+                // Clear admin cache
+                if ($publishedBy) {
+                    Cache::forget('admin_pending_submissions_' . $publishedBy);
+                    Cache::forget('admin_integrated_stats_' . $publishedBy);
+                }
+
+                // Create notification for user
+                if (class_exists('\App\Models\Notification')) {
+                    try {
+                        \App\Models\Notification::createSubmissionNotification($this->id, 'submission_published');
+                    } catch (\Exception $e) {
+                        Log::warning('Failed to create publication notification', [
+                            'submission_id' => $this->id,
+                            'error' => $e->getMessage()
+                        ]);
+                    }
+                }
+
+                Log::info('Submission published successfully', [
+                    'submission_id' => $this->id,
+                    'published_by' => $publishedBy,
+                    'title' => $this->title
+                ]);
+
+                return true;
+            } else {
+                throw new \Exception('Failed to publish content to community group');
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Failed to publish submission', [
+                'submission_id' => $this->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            throw new \Exception('Failed to publish submission: ' . $e->getMessage());
         }
-
-        return $this;
     }
 
+    /**
+     * ✅ ENHANCED: publishToGroup() method dengan better error handling
+     */
     public function publishToGroup()
     {
-        if ($this->status !== 'approved' && $this->status !== 'published') {
+        try {
+            // Find the corresponding chat group
+            $chatGroup = null;
+            if (class_exists('\App\Models\ChatGroup')) {
+                $chatGroup = \App\Models\ChatGroup::where('name', 'LIKE', '%' . $this->category->name . '%')->first();
+                
+                if (!$chatGroup) {
+                    // Create group if doesn't exist
+                    $chatGroup = \App\Models\ChatGroup::create([
+                        'name' => $this->category->name,
+                        'description' => $this->category->description ?? 'Community group for ' . $this->category->name,
+                        'creator_id' => 1, // Admin user
+                        'is_approved' => true,
+                    ]);
+                }
+            }
+
+            // Create group message (if GroupMessage model exists)
+            $message = null;
+            if (class_exists('\App\Models\GroupMessage') && $chatGroup) {
+                $message = \App\Models\GroupMessage::create([
+                    'group_id' => $chatGroup->id,
+                    'sender_id' => $this->user_id,
+                    'message_content' => "📢 {$this->title}\n\n{$this->description}",
+                    'attachment_path' => $this->attachment_path,
+                    'attachment_type' => $this->attachment_type,
+                    'attachment_name' => $this->attachment_name,
+                    'attachment_size' => $this->attachment_size,
+                ]);
+
+                Log::info('Submission published to group', [
+                    'submission_id' => $this->id,
+                    'group_id' => $chatGroup->id,
+                    'message_id' => $message->id
+                ]);
+            }
+
+            return $message ?? true;
+
+        } catch (\Exception $e) {
+            Log::error('Failed to publish submission to group', [
+                'submission_id' => $this->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
             return false;
         }
-
-        // Find the corresponding chat group
-        $chatGroup = \App\Models\ChatGroup::where('name', 'LIKE', '%' . $this->category->name . '%')->first();
-        
-        if (!$chatGroup) {
-            // Create group if doesn't exist
-            $chatGroup = \App\Models\ChatGroup::create([
-                'name' => $this->category->name,
-                'description' => $this->category->description,
-                'creator_id' => 1, // Admin user
-                'is_approved' => true,
-            ]);
-        }
-
-        // Create group message (if GroupMessage model exists)
-        $message = null;
-        if (class_exists('\App\Models\GroupMessage')) {
-            $message = \App\Models\GroupMessage::create([
-                'group_id' => $chatGroup->id,
-                'sender_id' => $this->user_id,
-                'message_content' => "📢 {$this->title}\n\n{$this->description}",
-                'attachment_path' => $this->attachment_path,
-                'attachment_type' => $this->attachment_type,
-                'attachment_name' => $this->attachment_name,
-                'attachment_size' => $this->attachment_size,
-            ]);
-        }
-
-        // Update status to published
-        $this->update(['status' => 'published']);
-
-        return $message ?? true;
     }
 
     /**
@@ -478,19 +652,34 @@ class ContentSubmission extends Model
     public function deleteAttachment()
     {
         if ($this->attachment_path) {
-            // Fix storage path handling
-            if (Storage::disk('public')->exists($this->attachment_path)) {
-                Storage::disk('public')->delete($this->attachment_path);
+            try {
+                // Fix storage path handling
+                if (Storage::disk('public')->exists($this->attachment_path)) {
+                    Storage::disk('public')->delete($this->attachment_path);
+                }
+                
+                $this->update([
+                    'attachment_path' => null,
+                    'attachment_type' => null,
+                    'attachment_name' => null,
+                    'attachment_size' => null,
+                ]);
+
+                Log::info('Submission attachment deleted', [
+                    'submission_id' => $this->id,
+                    'file_path' => $this->attachment_path
+                ]);
+                
+                return true;
+            } catch (\Exception $e) {
+                Log::error('Failed to delete submission attachment', [
+                    'submission_id' => $this->id,
+                    'file_path' => $this->attachment_path,
+                    'error' => $e->getMessage()
+                ]);
+                
+                return false;
             }
-            
-            $this->update([
-                'attachment_path' => null,
-                'attachment_type' => null,
-                'attachment_name' => null,
-                'attachment_size' => null,
-            ]);
-            
-            return true;
         }
         
         return false;
@@ -553,77 +742,88 @@ class ContentSubmission extends Model
     }
 
     /**
-     * ✅ UPDATED: Enhanced getUserSubmissionStats method
+     * ✅ ENHANCED: getUserSubmissionStats method dengan caching
      */
     public static function getUserSubmissionStats($userId)
     {
-        $stats = [
-            'total' => 0,
-            'pending_payment' => 0,
-            'pending_approval' => 0,
-            'approved' => 0,
-            'rejected' => 0,
-            'published' => 0,
-        ];
+        return Cache::remember("user_submission_stats_{$userId}", 300, function() use ($userId) {
+            $stats = [
+                'total' => 0,
+                'pending_payment' => 0,
+                'pending_approval' => 0,
+                'approved' => 0,
+                'rejected' => 0,
+                'published' => 0,
+            ];
 
-        $submissions = static::where('user_id', $userId)
-                            ->select('status', DB::raw('count(*) as count'))
-                            ->groupBy('status')
-                            ->get();
+            $submissions = static::where('user_id', $userId)
+                                ->select('status', DB::raw('count(*) as count'))
+                                ->groupBy('status')
+                                ->get();
 
-        foreach ($submissions as $submission) {
-            if (isset($stats[$submission->status])) {
-                $stats[$submission->status] = $submission->count;
-                $stats['total'] += $submission->count;
+            foreach ($submissions as $submission) {
+                if (isset($stats[$submission->status])) {
+                    $stats[$submission->status] = $submission->count;
+                    $stats['total'] += $submission->count;
+                }
             }
-        }
 
-        return $stats;
+            return $stats;
+        });
     }
 
     /**
-     * ✅ UPDATED: Enhanced getAdminStats method
+     * ✅ ENHANCED: getAdminStats method dengan caching dan revenue calculation
      */
     public static function getAdminStats()
     {
-        $stats = [
-            'total' => 0,
-            'pending_payment' => 0,
-            'pending_approval' => 0,
-            'approved' => 0,
-            'rejected' => 0,
-            'published' => 0,
-            'today' => 0,
-            'this_week' => 0,
-            'this_month' => 0,
-            'revenue' => 0,
-        ];
+        return Cache::remember('submission_admin_stats', 300, function() {
+            $stats = [
+                'total' => 0,
+                'pending_payment' => 0,
+                'pending_approval' => 0,
+                'approved' => 0,
+                'rejected' => 0,
+                'published' => 0,
+                'today' => 0,
+                'this_week' => 0,
+                'this_month' => 0,
+                'revenue' => 0,
+            ];
 
-        // Status counts
-        $submissions = static::select('status', DB::raw('count(*) as count'))
-                            ->groupBy('status')
-                            ->get();
+            try {
+                // Status counts
+                $submissions = static::select('status', DB::raw('count(*) as count'))
+                                    ->groupBy('status')
+                                    ->get();
 
-        foreach ($submissions as $submission) {
-            if (isset($stats[$submission->status])) {
-                $stats[$submission->status] = $submission->count;
-                $stats['total'] += $submission->count;
+                foreach ($submissions as $submission) {
+                    if (isset($stats[$submission->status])) {
+                        $stats[$submission->status] = $submission->count;
+                        $stats['total'] += $submission->count;
+                    }
+                }
+
+                // Time-based counts
+                $stats['today'] = static::whereDate('created_at', today())->count();
+                $stats['this_week'] = static::whereBetween('created_at', [now()->startOfWeek(), now()->endOfWeek()])->count();
+                $stats['this_month'] = static::whereMonth('created_at', now()->month)
+                                            ->whereYear('created_at', now()->year)
+                                            ->count();
+
+                // Revenue calculation
+                if (class_exists('\App\Models\Payment')) {
+                    $stats['revenue'] = \App\Models\Payment::where('status', 'confirmed')->sum('amount') ?? 0;
+                }
+
+            } catch (\Exception $e) {
+                Log::error('Failed to get admin submission stats', [
+                    'error' => $e->getMessage()
+                ]);
             }
-        }
 
-        // Time-based counts
-        $stats['today'] = static::whereDate('created_at', today())->count();
-        $stats['this_week'] = static::whereBetween('created_at', [now()->startOfWeek(), now()->endOfWeek()])->count();
-        $stats['this_month'] = static::whereMonth('created_at', now()->month)
-                                    ->whereYear('created_at', now()->year)
-                                    ->count();
-
-        // Revenue calculation
-        if (class_exists('\App\Models\Payment')) {
-            $stats['revenue'] = \App\Models\Payment::where('status', 'confirmed')->sum('amount') ?? 0;
-        }
-
-        return $stats;
+            return $stats;
+        });
     }
 
     /**
@@ -685,6 +885,65 @@ class ContentSubmission extends Model
     }
 
     /**
+     * ✅ ADDED: Dashboard integration methods
+     */
+    public function getTimelineData()
+    {
+        $timeline = [
+            [
+                'status' => 'created',
+                'title' => 'Submission Created',
+                'description' => 'Content submission created',
+                'timestamp' => $this->created_at,
+                'completed' => true
+            ]
+        ];
+
+        if ($this->submitted_at) {
+            $timeline[] = [
+                'status' => 'submitted',
+                'title' => 'Payment Confirmed',
+                'description' => 'Payment confirmed, waiting for approval',
+                'timestamp' => $this->submitted_at,
+                'completed' => true
+            ];
+        }
+
+        if ($this->isApproved()) {
+            $timeline[] = [
+                'status' => 'approved',
+                'title' => 'Content Approved',
+                'description' => 'Content approved by admin',
+                'timestamp' => $this->approved_at,
+                'completed' => true,
+                'admin' => $this->approvedBy->full_name ?? 'System'
+            ];
+        } elseif ($this->isRejected()) {
+            $timeline[] = [
+                'status' => 'rejected',
+                'title' => 'Content Rejected',
+                'description' => $this->rejection_reason,
+                'timestamp' => $this->rejected_at,
+                'completed' => true,
+                'admin' => $this->rejectedBy->full_name ?? 'System'
+            ];
+        }
+
+        if ($this->isPublished()) {
+            $timeline[] = [
+                'status' => 'published',
+                'title' => 'Content Published',
+                'description' => 'Content published to community',
+                'timestamp' => $this->published_at,
+                'completed' => true,
+                'admin' => $this->publishedBy->full_name ?? 'System'
+            ];
+        }
+
+        return $timeline;
+    }
+
+    /**
      * ✅ ADDED: Validation helpers
      */
     public function validateForSubmission()
@@ -718,5 +977,54 @@ class ContentSubmission extends Model
     public function isValid()
     {
         return empty($this->validateForSubmission());
+    }
+
+    /**
+     * ✅ ENHANCED: Model events dengan cache management
+     */
+    protected static function boot()
+    {
+        parent::boot();
+
+        static::created(function ($submission) {
+            // Clear cache when new submission is created
+            Cache::forget('submission_admin_stats');
+            Cache::forget("user_submission_stats_{$submission->user_id}");
+            
+            Log::info('Submission created', [
+                'submission_id' => $submission->id,
+                'user_id' => $submission->user_id,
+                'title' => $submission->title
+            ]);
+        });
+
+        static::updated(function ($submission) {
+            // Clear cache when submission is updated
+            Cache::forget('submission_admin_stats');
+            Cache::forget("user_submission_stats_{$submission->user_id}");
+            
+            // Clear admin-specific cache if status changed
+            if ($submission->isDirty('status')) {
+                $adminUsers = \App\Models\User::where('role', 'admin')->pluck('id');
+                foreach ($adminUsers as $adminId) {
+                    Cache::forget('admin_pending_submissions_' . $adminId);
+                    Cache::forget('admin_integrated_stats_' . $adminId);
+                }
+            }
+        });
+
+        static::deleting(function ($submission) {
+            // Delete attachment file when submission is deleted
+            $submission->deleteAttachment();
+            
+            // Clear cache
+            Cache::forget('submission_admin_stats');
+            Cache::forget("user_submission_stats_{$submission->user_id}");
+            
+            Log::info('Submission deleted', [
+                'submission_id' => $submission->id,
+                'user_id' => $submission->user_id
+            ]);
+        });
     }
 }

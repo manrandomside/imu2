@@ -224,6 +224,37 @@
             scrollbar-width: none;
         }
         /* END: Custom styles for Community Chat Page */
+
+        /* ✅ NEW: Admin Dropdown Styles */
+        .admin-dropdown {
+            transform-origin: top right;
+        }
+        .admin-dropdown.show {
+            animation: dropdownFadeIn 0.2s ease-out;
+        }
+        .admin-dropdown.hide {
+            animation: dropdownFadeOut 0.2s ease-in;
+        }
+        @keyframes dropdownFadeIn {
+            from {
+                opacity: 0;
+                transform: scale(0.95) translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+        @keyframes dropdownFadeOut {
+            from {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+            to {
+                opacity: 0;
+                transform: scale(0.95) translateY(-10px);
+            }
+        }
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen flex flex-col">
@@ -268,59 +299,171 @@
                 <a href="{{ route('community') }}" class="hover:text-gray-200">Community</a>
                 <a href="{{ route('submissions.index') }}" class="hover:text-gray-200">Submit Konten</a>
                 
-                {{-- ✅ SUPER OPTIMIZED: Alumni Approval Link dengan Caching & Safety --}}
+                {{-- ✅ ENHANCED: Admin Management Dropdown - GANTI YANG LAMA --}}
                 @auth
                     @if(auth()->user()->isAdmin())
-                        <a href="{{ route('admin.alumni-approval.index') }}" class="hover:text-gray-200 relative">
-                            Alumni Approval
-                            @php
-                                $pendingCount = 0;
-                                
-                                try {
-                                    // ✅ OPTIMASI LEVEL 1: Cache dengan key unik dan expiry
-                                    $cacheKey = 'alumni_pending_count_' . auth()->id();
-                                    $pendingCount = cache()->remember($cacheKey, 60, function() {
-                                        try {
-                                            // ✅ OPTIMASI LEVEL 2: Query dengan timeout 2 detik
+                        <div class="relative group">
+                            <button class="hover:text-gray-200 flex items-center space-x-1 group-hover:text-gray-200" 
+                                    onclick="toggleAdminDropdown()" 
+                                    id="adminDropdownBtn">
+                                <span>Admin Panel</span>
+                                <i class="fas fa-chevron-down text-xs transition-transform duration-200" id="adminDropdownIcon"></i>
+                                {{-- Badge untuk notifikasi gabungan --}}
+                                @php
+                                    $totalPending = 0;
+                                    
+                                    // Hitung pending payments
+                                    try {
+                                        $pendingPayments = cache()->remember('admin_pending_payments_' . auth()->id(), 60, function() {
+                                            return \App\Models\Payment::where('status', 'pending')->count();
+                                        });
+                                        $totalPending += $pendingPayments;
+                                    } catch (\Exception $e) {
+                                        $pendingPayments = 0;
+                                    }
+                                    
+                                    // Hitung pending submissions
+                                    try {
+                                        $pendingSubmissions = cache()->remember('admin_pending_submissions_' . auth()->id(), 60, function() {
+                                            return \App\Models\ContentSubmission::where('status', 'pending_approval')->count();
+                                        });
+                                        $totalPending += $pendingSubmissions;
+                                    } catch (\Exception $e) {
+                                        $pendingSubmissions = 0;
+                                    }
+                                    
+                                    // Hitung pending alumni (existing code)
+                                    $pendingAlumni = 0;
+                                    try {
+                                        $cacheKey = 'alumni_pending_count_' . auth()->id();
+                                        $pendingAlumni = cache()->remember($cacheKey, 60, function() {
                                             $startTime = microtime(true);
-                                            
-                                            // ✅ OPTIMASI LEVEL 3: Query super minimal dengan limit
                                             $count = \Illuminate\Support\Facades\DB::table('users')
                                                 ->where('role', 'alumni')
                                                 ->where('is_verified', 0)
-                                                ->limit(15) // Limit rendering badge maksimal 15
+                                                ->limit(15)
                                                 ->count();
-                                            
-                                            $executionTime = microtime(true) - $startTime;
-                                            
-                                            // ✅ OPTIMASI LEVEL 4: Log jika query lambat
-                                            if ($executionTime > 0.5) {
-                                                \Illuminate\Support\Facades\Log::warning("Slow alumni count query: {$executionTime}s");
-                                            }
-                                            
-                                            return min($count, 99); // Cap maksimal 99 untuk UI
-                                            
-                                        } catch (\Exception $e) {
-                                            // ✅ OPTIMASI LEVEL 5: Fallback aman
-                                            \Illuminate\Support\Facades\Log::error('Alumni count query failed: ' . $e->getMessage());
-                                            return 0;
-                                        }
-                                    });
-                                    
-                                } catch (\Exception $e) {
-                                    // ✅ OPTIMASI LEVEL 6: Fallback cache gagal
-                                    $pendingCount = 0;
-                                    if (config('app.debug')) {
-                                        \Illuminate\Support\Facades\Log::error('Alumni count cache failed: ' . $e->getMessage());
+                                            return min($count, 99);
+                                        });
+                                        $totalPending += $pendingAlumni;
+                                    } catch (\Exception $e) {
+                                        $pendingAlumni = 0;
                                     }
-                                }
-                            @endphp
-                            @if($pendingCount > 0)
-                                <span class="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center font-bold">
-                                    {{ $pendingCount > 99 ? '99+' : $pendingCount }}
-                                </span>
-                            @endif
-                        </a>
+                                @endphp
+                                
+                                @if($totalPending > 0)
+                                    <span class="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center font-bold">
+                                        {{ $totalPending > 99 ? '99+' : $totalPending }}
+                                    </span>
+                                @endif
+                            </button>
+                            
+                            {{-- Dropdown Menu --}}
+                            <div class="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 z-50 hidden opacity-0 transform scale-95 transition-all duration-200 admin-dropdown" 
+                                 id="adminDropdown">
+                                <div class="py-2">
+                                    {{-- Header --}}
+                                    <div class="px-4 py-2 border-b border-gray-200">
+                                        <h3 class="font-semibold text-gray-800">Admin Management</h3>
+                                        <p class="text-sm text-gray-600">Kelola sistem IMU</p>
+                                    </div>
+                                    
+                                    {{-- Dashboard Terintegrasi --}}
+                                    <a href="{{ route('admin.dashboard.index') }}" 
+                                       class="flex items-center justify-between px-4 py-3 hover:bg-gray-50 text-gray-700 transition-colors">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+                                                <i class="fas fa-tachometer-alt text-blue-600"></i>
+                                            </div>
+                                            <div>
+                                                <p class="font-medium">Dashboard Admin</p>
+                                                <p class="text-sm text-gray-500">Kelola payment & submission</p>
+                                            </div>
+                                        </div>
+                                        @if(($pendingPayments + $pendingSubmissions) > 0)
+                                            <span class="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full font-semibold">
+                                                {{ $pendingPayments + $pendingSubmissions }}
+                                            </span>
+                                        @endif
+                                    </a>
+
+                                    {{-- Payment Management --}}
+                                    <a href="{{ route('admin.payments.index') }}" 
+                                       class="flex items-center justify-between px-4 py-3 hover:bg-gray-50 text-gray-700 transition-colors">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
+                                                <i class="fas fa-credit-card text-green-600"></i>
+                                            </div>
+                                            <div>
+                                                <p class="font-medium">Kelola Pembayaran</p>
+                                                <p class="text-sm text-gray-500">Konfirmasi & verifikasi</p>
+                                            </div>
+                                        </div>
+                                        @if($pendingPayments > 0)
+                                            <span class="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full font-semibold">
+                                                {{ $pendingPayments }}
+                                            </span>
+                                        @endif
+                                    </a>
+                                    
+                                    {{-- Submission Management --}}
+                                    <a href="{{ route('admin.submissions.index') }}" 
+                                       class="flex items-center justify-between px-4 py-3 hover:bg-gray-50 text-gray-700 transition-colors">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
+                                                <i class="fas fa-tasks text-purple-600"></i>
+                                            </div>
+                                            <div>
+                                                <p class="font-medium">Kelola Submission</p>
+                                                <p class="text-sm text-gray-500">Review & publikasi</p>
+                                            </div>
+                                        </div>
+                                        @if($pendingSubmissions > 0)
+                                            <span class="bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded-full font-semibold">
+                                                {{ $pendingSubmissions }}
+                                            </span>
+                                        @endif
+                                    </a>
+                                    
+                                    {{-- Alumni Approval --}}
+                                    <a href="{{ route('admin.alumni-approval.index') }}" 
+                                       class="flex items-center justify-between px-4 py-3 hover:bg-gray-50 text-gray-700 transition-colors">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+                                                <i class="fas fa-user-graduate text-blue-600"></i>
+                                            </div>
+                                            <div>
+                                                <p class="font-medium">Alumni Approval</p>
+                                                <p class="text-sm text-gray-500">Verifikasi alumni</p>
+                                            </div>
+                                        </div>
+                                        @if($pendingAlumni > 0)
+                                            <span class="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full font-semibold">
+                                                {{ $pendingAlumni }}
+                                            </span>
+                                        @endif
+                                    </a>
+                                    
+                                    {{-- Divider --}}
+                                    <div class="border-t border-gray-200 my-2"></div>
+                                    
+                                    {{-- Quick Stats --}}
+                                    <div class="px-4 py-2">
+                                        <p class="text-sm font-medium text-gray-800 mb-2">Status Cepat</p>
+                                        <div class="grid grid-cols-2 gap-2 text-xs">
+                                            <div class="bg-yellow-50 p-2 rounded">
+                                                <p class="text-yellow-800 font-medium">{{ $pendingPayments + $pendingSubmissions }}</p>
+                                                <p class="text-yellow-600">Pending Review</p>
+                                            </div>
+                                            <div class="bg-green-50 p-2 rounded">
+                                                <p class="text-green-800 font-medium">{{ cache()->get('admin_total_approved_today', 0) }}</p>
+                                                <p class="text-green-600">Approved Hari Ini</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     @endif
                 @endauth
                 
@@ -396,6 +539,48 @@
     </footer>
 
     @stack('scripts') {{-- Pastikan ini ada untuk menampung script dari halaman child --}}
+
+    {{-- ✅ ADMIN DROPDOWN JAVASCRIPT --}}
+    <script>
+        function toggleAdminDropdown() {
+            const dropdown = document.getElementById('adminDropdown');
+            const icon = document.getElementById('adminDropdownIcon');
+            
+            if (dropdown.classList.contains('hidden')) {
+                // Show dropdown
+                dropdown.classList.remove('hidden');
+                setTimeout(() => {
+                    dropdown.classList.remove('opacity-0', 'scale-95');
+                    dropdown.classList.add('opacity-100', 'scale-100');
+                }, 10);
+                icon.classList.add('rotate-180');
+            } else {
+                // Hide dropdown  
+                dropdown.classList.remove('opacity-100', 'scale-100');
+                dropdown.classList.add('opacity-0', 'scale-95');
+                icon.classList.remove('rotate-180');
+                setTimeout(() => {
+                    dropdown.classList.add('hidden');
+                }, 200);
+            }
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const dropdown = document.getElementById('adminDropdown');
+            const button = document.getElementById('adminDropdownBtn');
+            
+            if (dropdown && button && !button.contains(event.target) && !dropdown.contains(event.target)) {
+                dropdown.classList.remove('opacity-100', 'scale-100');
+                dropdown.classList.add('opacity-0', 'scale-95');
+                const icon = document.getElementById('adminDropdownIcon');
+                if (icon) icon.classList.remove('rotate-180');
+                setTimeout(() => {
+                    dropdown.classList.add('hidden');
+                }, 200);
+            }
+        });
+    </script>
 
     {{-- ✅ NOTIFICATION JAVASCRIPT - OPTIMIZED --}}
     @auth

@@ -6,6 +6,8 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
 
 class Payment extends Model
 {
@@ -20,12 +22,15 @@ class Payment extends Model
         'status',
         'confirmed_by',
         'confirmed_at',
+        'rejected_by',
+        'rejected_at',
         'rejection_reason',
         'payment_details',
     ];
 
     protected $casts = [
         'confirmed_at' => 'datetime',
+        'rejected_at' => 'datetime',
         'payment_details' => 'array',
         'amount' => 'decimal:2',
     ];
@@ -46,6 +51,14 @@ class Payment extends Model
     public function confirmedBy()
     {
         return $this->belongsTo(User::class, 'confirmed_by');
+    }
+
+    /**
+     * ✅ ADDED: Relationship untuk rejected_by
+     */
+    public function rejectedBy()
+    {
+        return $this->belongsTo(User::class, 'rejected_by');
     }
 
     /**
@@ -154,6 +167,14 @@ class Payment extends Model
     public function getCreatedAtHumanAttribute()
     {
         return $this->created_at->diffForHumans();
+    }
+
+    /**
+     * ✅ ADDED: Rejected at human readable
+     */
+    public function getRejectedAtHumanAttribute()
+    {
+        return $this->rejected_at ? $this->rejected_at->diffForHumans() : null;
     }
 
     /**
@@ -320,50 +341,122 @@ class Payment extends Model
         return $this->status === 'pending';
     }
 
-    public function confirm($adminId = null)
+    /**
+     * ✅ ENHANCED: Confirm payment - compatible dengan dashboard admin
+     */
+    public function confirm($confirmedBy = null)
     {
         if (!$this->canBeConfirmed()) {
-            throw new \Exception('Payment cannot be confirmed');
+            throw new \Exception('Payment cannot be confirmed in current status: ' . $this->status);
         }
 
-        $this->update([
-            'status' => 'confirmed',
-            'confirmed_by' => $adminId,
-            'confirmed_at' => now(),
-        ]);
+        try {
+            $this->update([
+                'status' => 'confirmed',
+                'confirmed_by' => $confirmedBy,
+                'confirmed_at' => now(),
+            ]);
 
-        // Update submission status if payment is confirmed
-        if ($this->submission) {
-            $this->submission->update(['status' => 'pending_approval']);
+            // Update submission status if payment is confirmed
+            if ($this->submission && $this->submission->status === 'payment_pending') {
+                $this->submission->update(['status' => 'pending_approval']);
+            }
+
+            // Clear admin cache
+            if ($confirmedBy) {
+                Cache::forget('admin_pending_payments_' . $confirmedBy);
+                Cache::forget('admin_integrated_stats_' . $confirmedBy);
+            }
+
+            // Create notification for user
+            if (class_exists('\App\Models\Notification')) {
+                try {
+                    \App\Models\Notification::createPaymentNotification($this->id, 'payment_confirmed');
+                } catch (\Exception $e) {
+                    Log::warning('Failed to create payment confirmation notification', [
+                        'payment_id' => $this->id,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            Log::info('Payment confirmed successfully', [
+                'payment_id' => $this->id,
+                'confirmed_by' => $confirmedBy,
+                'submission_id' => $this->submission_id,
+                'amount' => $this->amount
+            ]);
+
+            return true;
+
+        } catch (\Exception $e) {
+            Log::error('Failed to confirm payment', [
+                'payment_id' => $this->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            throw new \Exception('Failed to confirm payment: ' . $e->getMessage());
         }
-
-        // Create notification for user
-        if (class_exists('\App\Models\Notification')) {
-            \App\Models\Notification::createPaymentNotification($this->id, 'payment_confirmed');
-        }
-
-        return $this;
     }
 
-    public function reject($reason, $adminId = null)
+    /**
+     * ✅ ENHANCED: Reject payment - compatible dengan dashboard admin
+     */
+    public function reject($rejectedBy, $reason)
     {
         if (!$this->canBeRejected()) {
-            throw new \Exception('Payment cannot be rejected');
+            throw new \Exception('Payment cannot be rejected in current status: ' . $this->status);
         }
 
-        $this->update([
-            'status' => 'rejected',
-            'rejection_reason' => $reason,
-            'confirmed_by' => $adminId,
-            'confirmed_at' => now(),
-        ]);
-
-        // Create notification for user
-        if (class_exists('\App\Models\Notification')) {
-            \App\Models\Notification::createPaymentNotification($this->id, 'payment_rejected');
+        if (empty($reason)) {
+            throw new \Exception('Rejection reason is required');
         }
 
-        return $this;
+        try {
+            $this->update([
+                'status' => 'rejected',
+                'rejection_reason' => $reason,
+                'rejected_by' => $rejectedBy,
+                'rejected_at' => now(),
+            ]);
+
+            // Clear admin cache
+            if ($rejectedBy) {
+                Cache::forget('admin_pending_payments_' . $rejectedBy);
+                Cache::forget('admin_integrated_stats_' . $rejectedBy);
+            }
+
+            // Create notification for user
+            if (class_exists('\App\Models\Notification')) {
+                try {
+                    \App\Models\Notification::createPaymentNotification($this->id, 'payment_rejected');
+                } catch (\Exception $e) {
+                    Log::warning('Failed to create payment rejection notification', [
+                        'payment_id' => $this->id,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            Log::info('Payment rejected successfully', [
+                'payment_id' => $this->id,
+                'rejected_by' => $rejectedBy,
+                'reason' => $reason,
+                'submission_id' => $this->submission_id
+            ]);
+
+            return true;
+
+        } catch (\Exception $e) {
+            Log::error('Failed to reject payment', [
+                'payment_id' => $this->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            throw new \Exception('Failed to reject payment: ' . $e->getMessage());
+        }
     }
 
     /**
@@ -372,7 +465,19 @@ class Payment extends Model
     public function deleteProof()
     {
         if ($this->payment_proof_path && Storage::disk('public')->exists($this->payment_proof_path)) {
-            Storage::disk('public')->delete($this->payment_proof_path);
+            try {
+                Storage::disk('public')->delete($this->payment_proof_path);
+                Log::info('Payment proof deleted', [
+                    'payment_id' => $this->id,
+                    'file_path' => $this->payment_proof_path
+                ]);
+            } catch (\Exception $e) {
+                Log::error('Failed to delete payment proof', [
+                    'payment_id' => $this->id,
+                    'file_path' => $this->payment_proof_path,
+                    'error' => $e->getMessage()
+                ]);
+            }
         }
     }
 
@@ -396,21 +501,63 @@ class Payment extends Model
     }
 
     /**
-     * ✅ ADDED: Statistics and reporting methods
+     * ✅ ENHANCED: Statistics and reporting methods untuk dashboard admin
      */
     public static function getAdminStats()
     {
-        return [
-            'total' => static::count(),
-            'pending' => static::pending()->count(),
-            'confirmed' => static::confirmed()->count(),
-            'rejected' => static::rejected()->count(),
-            'total_revenue' => static::confirmed()->sum('amount') ?? 0,
-            'pending_amount' => static::pending()->sum('amount') ?? 0,
-            'today' => static::today()->count(),
-            'this_week' => static::where('created_at', '>=', now()->startOfWeek())->count(),
-            'this_month' => static::whereMonth('created_at', now()->month)->count(),
-        ];
+        try {
+            return Cache::remember('payment_admin_stats', 300, function() {
+                $pendingPayments = static::pending()->count();
+                $confirmedPayments = static::confirmed()->count();
+                $rejectedPayments = static::rejected()->count();
+                $totalPayments = static::count();
+                
+                $totalRevenue = static::confirmed()->sum('amount') ?? 0;
+                $pendingAmount = static::pending()->sum('amount') ?? 0;
+                
+                $todayPayments = static::today()->count();
+                $todayRevenue = static::today()->confirmed()->sum('amount') ?? 0;
+                
+                $weeklyPayments = static::where('created_at', '>=', now()->startOfWeek())->count();
+                $monthlyPayments = static::whereMonth('created_at', now()->month)->count();
+
+                return [
+                    'total_payments' => $totalPayments,
+                    'pending_payments' => $pendingPayments,
+                    'confirmed_payments' => $confirmedPayments,
+                    'rejected_payments' => $rejectedPayments,
+                    'total_revenue' => $totalRevenue,
+                    'pending_amount' => $pendingAmount,
+                    'today_payments' => $todayPayments,
+                    'today_revenue' => $todayRevenue,
+                    'weekly_payments' => $weeklyPayments,
+                    'monthly_payments' => $monthlyPayments,
+                    'average_amount' => $totalPayments > 0 ? $totalRevenue / $confirmedPayments : 0,
+                    'pending_percentage' => $totalPayments > 0 ? round(($pendingPayments / $totalPayments) * 100, 1) : 0,
+                    'confirmation_rate' => $totalPayments > 0 ? round(($confirmedPayments / $totalPayments) * 100, 1) : 0,
+                ];
+            });
+        } catch (\Exception $e) {
+            Log::error('Failed to get admin payment stats', [
+                'error' => $e->getMessage()
+            ]);
+            
+            return [
+                'total_payments' => 0,
+                'pending_payments' => 0,
+                'confirmed_payments' => 0,
+                'rejected_payments' => 0,
+                'total_revenue' => 0,
+                'pending_amount' => 0,
+                'today_payments' => 0,
+                'today_revenue' => 0,
+                'weekly_payments' => 0,
+                'monthly_payments' => 0,
+                'average_amount' => 0,
+                'pending_percentage' => 0,
+                'confirmation_rate' => 0,
+            ];
+        }
     }
 
     public static function getUserStats($userId)
@@ -474,12 +621,18 @@ class Payment extends Model
     }
 
     /**
-     * ✅ ENHANCED: Bulk operations with better error handling
+     * ✅ ENHANCED: Bulk operations with better error handling untuk dashboard admin
      */
     public static function bulkConfirm(array $paymentIds, $adminId)
     {
         $confirmed = 0;
         $errors = [];
+        
+        Log::info('Starting bulk payment confirmation', [
+            'payment_ids' => $paymentIds,
+            'admin_id' => $adminId,
+            'count' => count($paymentIds)
+        ]);
         
         foreach ($paymentIds as $paymentId) {
             $payment = static::find($paymentId);
@@ -490,7 +643,7 @@ class Payment extends Model
             }
             
             if (!$payment->canBeConfirmed()) {
-                $errors[] = "Payment ID {$paymentId} cannot be confirmed.";
+                $errors[] = "Payment ID {$paymentId} cannot be confirmed (status: {$payment->status}).";
                 continue;
             }
             
@@ -499,8 +652,23 @@ class Payment extends Model
                 $confirmed++;
             } catch (\Exception $e) {
                 $errors[] = "Failed to confirm payment ID {$paymentId}: " . $e->getMessage();
+                Log::error('Bulk confirm payment failed', [
+                    'payment_id' => $paymentId,
+                    'error' => $e->getMessage()
+                ]);
             }
         }
+        
+        // Clear admin cache
+        Cache::forget('admin_pending_payments_' . $adminId);
+        Cache::forget('admin_integrated_stats_' . $adminId);
+        Cache::forget('payment_admin_stats');
+        
+        Log::info('Bulk payment confirmation completed', [
+            'confirmed' => $confirmed,
+            'errors_count' => count($errors),
+            'admin_id' => $adminId
+        ]);
         
         return [
             'confirmed' => $confirmed,
@@ -509,12 +677,19 @@ class Payment extends Model
     }
 
     /**
-     * ✅ ENHANCED: Bulk reject with better error handling
+     * ✅ ENHANCED: Bulk reject with better error handling untuk dashboard admin
      */
     public static function bulkReject(array $paymentIds, $reason, $adminId = null)
     {
         $rejected = 0;
         $errors = [];
+        
+        Log::info('Starting bulk payment rejection', [
+            'payment_ids' => $paymentIds,
+            'admin_id' => $adminId,
+            'count' => count($paymentIds),
+            'reason' => $reason
+        ]);
         
         foreach ($paymentIds as $paymentId) {
             $payment = static::find($paymentId);
@@ -525,17 +700,34 @@ class Payment extends Model
             }
             
             if (!$payment->canBeRejected()) {
-                $errors[] = "Payment ID {$paymentId} cannot be rejected.";
+                $errors[] = "Payment ID {$paymentId} cannot be rejected (status: {$payment->status}).";
                 continue;
             }
             
             try {
-                $payment->reject($reason, $adminId);
+                $payment->reject($adminId, $reason);
                 $rejected++;
             } catch (\Exception $e) {
                 $errors[] = "Failed to reject payment ID {$paymentId}: " . $e->getMessage();
+                Log::error('Bulk reject payment failed', [
+                    'payment_id' => $paymentId,
+                    'error' => $e->getMessage()
+                ]);
             }
         }
+        
+        // Clear admin cache
+        if ($adminId) {
+            Cache::forget('admin_pending_payments_' . $adminId);
+            Cache::forget('admin_integrated_stats_' . $adminId);
+        }
+        Cache::forget('payment_admin_stats');
+        
+        Log::info('Bulk payment rejection completed', [
+            'rejected' => $rejected,
+            'errors_count' => count($errors),
+            'admin_id' => $adminId
+        ]);
         
         return [
             'rejected' => $rejected,
@@ -570,6 +762,66 @@ class Payment extends Model
     }
 
     /**
+     * ✅ ADDED: Dashboard integration methods
+     */
+    public function getStatusBadgeClass()
+    {
+        $classes = [
+            'pending' => 'bg-yellow-100 text-yellow-800 border border-yellow-200',
+            'confirmed' => 'bg-green-100 text-green-800 border border-green-200',
+            'rejected' => 'bg-red-100 text-red-800 border border-red-200',
+        ];
+
+        return $classes[$this->status] ?? 'bg-gray-100 text-gray-800 border border-gray-200';
+    }
+
+    public function getProgressPercentage()
+    {
+        $percentages = [
+            'pending' => 50,
+            'confirmed' => 100,
+            'rejected' => 100,
+        ];
+
+        return $percentages[$this->status] ?? 0;
+    }
+
+    public function getTimelineData()
+    {
+        $timeline = [
+            [
+                'status' => 'created',
+                'title' => 'Payment Created',
+                'description' => 'Payment submitted by user',
+                'timestamp' => $this->created_at,
+                'completed' => true
+            ]
+        ];
+
+        if ($this->isConfirmed()) {
+            $timeline[] = [
+                'status' => 'confirmed',
+                'title' => 'Payment Confirmed',
+                'description' => 'Payment confirmed by admin',
+                'timestamp' => $this->confirmed_at,
+                'completed' => true,
+                'admin' => $this->confirmedBy->full_name ?? 'System'
+            ];
+        } elseif ($this->isRejected()) {
+            $timeline[] = [
+                'status' => 'rejected',
+                'title' => 'Payment Rejected',
+                'description' => $this->rejection_reason,
+                'timestamp' => $this->rejected_at,
+                'completed' => true,
+                'admin' => $this->rejectedBy->full_name ?? 'System'
+            ];
+        }
+
+        return $timeline;
+    }
+
+    /**
      * ✅ ADDED: Export functionality
      */
     public function getExportData()
@@ -586,20 +838,56 @@ class Payment extends Model
             'status' => $this->status_display,
             'created_at' => $this->created_at->format('Y-m-d H:i:s'),
             'confirmed_at' => $this->confirmed_at ? $this->confirmed_at->format('Y-m-d H:i:s') : null,
+            'rejected_at' => $this->rejected_at ? $this->rejected_at->format('Y-m-d H:i:s') : null,
             'rejection_reason' => $this->rejection_reason,
+            'confirmed_by' => $this->confirmedBy->full_name ?? null,
+            'rejected_by' => $this->rejectedBy->full_name ?? null,
         ];
     }
 
     /**
-     * ✅ ADDED: Delete method with cleanup
+     * ✅ ENHANCED: Model events dengan cleanup dan cache management
      */
     protected static function boot()
     {
         parent::boot();
 
+        static::created(function ($payment) {
+            // Clear cache when new payment is created
+            Cache::forget('payment_admin_stats');
+            
+            Log::info('Payment created', [
+                'payment_id' => $payment->id,
+                'user_id' => $payment->user_id,
+                'amount' => $payment->amount
+            ]);
+        });
+
+        static::updated(function ($payment) {
+            // Clear cache when payment is updated
+            Cache::forget('payment_admin_stats');
+            
+            // Clear admin-specific cache if status changed
+            if ($payment->isDirty('status')) {
+                $adminUsers = \App\Models\User::where('role', 'admin')->pluck('id');
+                foreach ($adminUsers as $adminId) {
+                    Cache::forget('admin_pending_payments_' . $adminId);
+                    Cache::forget('admin_integrated_stats_' . $adminId);
+                }
+            }
+        });
+
         static::deleting(function ($payment) {
             // Delete payment proof file when payment is deleted
             $payment->deleteProof();
+            
+            // Clear cache
+            Cache::forget('payment_admin_stats');
+            
+            Log::info('Payment deleted', [
+                'payment_id' => $payment->id,
+                'user_id' => $payment->user_id
+            ]);
         });
     }
 }

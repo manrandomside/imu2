@@ -60,11 +60,13 @@ class Kernel extends HttpKernel
         'throttle' => \Illuminate\Routing\Middleware\ThrottleRequests::class,
         'signed' => \Illuminate\Routing\Middleware\ValidateSignature::class,
         'verified' => \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
-        // TAMBAHKAN ALIAS UNTUK MIDDLEWARE KITA DI SINI
+        // MIDDLEWARE YANG SUDAH ADA
         'profile_complete' => \App\Http\Middleware\CheckProfileCompletion::class,
         'role' => \App\Http\Middleware\RoleMiddleware::class,
         'admin' => \App\Http\Middleware\AdminOnlyMiddleware::class,
         'moderator' => \App\Http\Middleware\ModeratorOrAdminMiddleware::class,
+        // ✅ TAMBAHAN BARU: Middleware untuk Dashboard Admin Terintegrasi
+        'admin.dashboard' => \App\Http\Middleware\AdminMiddleware::class,
     ];
 
     /**

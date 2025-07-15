@@ -14,6 +14,7 @@ use App\Http\Controllers\ModeratorController;
 use App\Http\Controllers\ContentSubmissionController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\Admin\AlumniApprovalController; // ✅ Import sudah benar
+use App\Http\Controllers\Admin\DashboardController; // ✅ NEW: Import DashboardController
 
 // Rute default, bisa diarahkan ke halaman login atau register nantinya
 Route::get('/', function () {
@@ -150,80 +151,102 @@ Route::middleware(['auth'])->group(function () {
 });
 
 // ===================================================================
-// ✅ ADMIN ROUTES FOR CONTENT SUBMISSION & PAYMENT MANAGEMENT
+// ✅ FIXED: ADMIN ROUTES - Mengganti Closure Middleware dengan Named Middleware
 // ===================================================================
 
-Route::middleware(['auth'])->group(function () {
+Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(function () {
     
-    // ✅ ADMIN SUBMISSION MANAGEMENT
-    Route::get('/admin/submissions', [ContentSubmissionController::class, 'adminIndex'])->name('admin.submissions.index');
-    Route::post('/admin/submissions/{submission}/approve', [ContentSubmissionController::class, 'approve'])->name('admin.submissions.approve');
-    Route::post('/admin/submissions/{submission}/reject', [ContentSubmissionController::class, 'reject'])->name('admin.submissions.reject');
-    // ✅ ADDED: Missing publish route (method exists in controller but route was missing)
-    Route::post('/admin/submissions/{submission}/publish', [ContentSubmissionController::class, 'publish'])->name('admin.submissions.publish');
+    // ✅ NEW: Integrated Admin Dashboard
+    Route::get('/dashboard', [DashboardController::class, 'index'])
+        ->name('dashboard.index');
+    Route::get('/dashboard/stats', [DashboardController::class, 'getStats'])
+        ->name('dashboard.stats');
+    Route::post('/dashboard/bulk-action', [DashboardController::class, 'bulkAction'])
+        ->name('dashboard.bulk_action');
+    Route::get('/dashboard/export', [DashboardController::class, 'exportData'])
+        ->name('dashboard.export');
     
-    // ✅ ADMIN PAYMENT MANAGEMENT  
-    Route::get('/admin/payments', [PaymentController::class, 'adminIndex'])->name('admin.payments.index');
-    Route::post('/admin/payments/{payment}/confirm', [PaymentController::class, 'confirm'])->name('admin.payments.confirm');
-    Route::post('/admin/payments/{payment}/reject', [PaymentController::class, 'reject'])->name('admin.payments.reject');
-    Route::post('/admin/payments/bulk-action', [PaymentController::class, 'bulkAction'])->name('admin.payments.bulk_action');
+    // ✅ EXISTING: Submission Management (Enhanced)
+    Route::get('/submissions', [ContentSubmissionController::class, 'adminIndex'])
+        ->name('submissions.index');
+    Route::post('/submissions/{submission}/approve', [ContentSubmissionController::class, 'approve'])
+        ->name('submissions.approve');
+    Route::post('/submissions/{submission}/reject', [ContentSubmissionController::class, 'reject'])
+        ->name('submissions.reject');
+    Route::post('/submissions/{submission}/publish', [ContentSubmissionController::class, 'publish'])
+        ->name('submissions.publish');
     
-    // ✅ ADDED: Export & Analytics Routes
-    Route::get('/admin/payments/export', [PaymentController::class, 'exportCsv'])->name('admin.payments.export');
+    // ✅ EXISTING: Payment Management (Enhanced)
+    Route::get('/payments', [PaymentController::class, 'adminIndex'])
+        ->name('payments.index');
+    Route::post('/payments/{payment}/confirm', [PaymentController::class, 'confirm'])
+        ->name('payments.confirm');
+    Route::post('/payments/{payment}/reject', [PaymentController::class, 'reject'])
+        ->name('payments.reject');
+    Route::post('/payments/bulk-action', [PaymentController::class, 'bulkAction'])
+        ->name('payments.bulk_action');
+    Route::get('/payments/export', [PaymentController::class, 'exportCsv'])
+        ->name('payments.export');
     
-    // ✅ ADMIN API ROUTES
-    Route::get('/api/admin/payments/stats', [PaymentController::class, 'getStats'])->name('api.admin.payments.stats');
-    Route::get('/api/admin/payments/stats-by-date', [PaymentController::class, 'getStatsByDateRange'])->name('api.admin.payments.stats_by_date');
-});
-
-// ===================================================================
-// ✅ ADMIN ALUMNI APPROVAL ROUTES - FIXED & ORGANIZED
-// ===================================================================
-
-Route::middleware(['auth'])->prefix('admin')->name('admin.')->group(function () {
-    
-    // ✅ Alumni Approval Routes - FIXED
+    // ✅ FIXED: Alumni Approval - Menggunakan Named Middleware
     Route::get('/alumni-approval', [AlumniApprovalController::class, 'index'])
         ->name('alumni-approval.index');
-    
     Route::get('/alumni-approval/{id}', [AlumniApprovalController::class, 'show'])
         ->name('alumni-approval.show');
-    
     Route::post('/alumni-approval/{id}/approve', [AlumniApprovalController::class, 'approve'])
         ->name('alumni-approval.approve');
-    
     Route::post('/alumni-approval/{id}/reject', [AlumniApprovalController::class, 'reject'])
         ->name('alumni-approval.reject');
-    
     Route::get('/alumni-approval/{id}/download', [AlumniApprovalController::class, 'downloadDocument'])
         ->name('alumni-approval.download');
-    
-    // ✅ NEW: Cache refresh route for navbar notification badge
     Route::post('/alumni-approval/refresh-cache', [AlumniApprovalController::class, 'refreshCache'])
         ->name('alumni-approval.refresh-cache');
+    Route::get('/alumni-approval/stats', [AlumniApprovalController::class, 'getStats'])
+        ->name('alumni-approval.stats');
     
-    // ✅ MODERATOR MANAGEMENT - Sementara tanpa middleware khusus, akan divalidasi di controller
-    Route::get('/moderators', [CommunityController::class, 'getAvailableModerators'])->name('get_moderators');
-    Route::post('/groups/{groupId}/assign-moderator', [CommunityController::class, 'assignModerator'])->name('assign_moderator');
-    Route::delete('/groups/{groupId}/unassign-moderator', [CommunityController::class, 'unassignModerator'])->name('unassign_moderator');
+    // ✅ API Routes for dashboard & analytics
+    Route::get('/api/payments/stats', [PaymentController::class, 'getStats'])
+        ->name('api.payments.stats');
+    Route::get('/api/payments/stats-by-date', [PaymentController::class, 'getStatsByDateRange'])
+        ->name('api.payments.stats_by_date');
+    
+    // ✅ MODERATOR MANAGEMENT - Enhanced
+    Route::get('/moderators', [CommunityController::class, 'getAvailableModerators'])
+        ->name('get_moderators');
+    Route::post('/groups/{groupId}/assign-moderator', [CommunityController::class, 'assignModerator'])
+        ->name('assign_moderator');
+    Route::delete('/groups/{groupId}/unassign-moderator', [CommunityController::class, 'unassignModerator'])
+        ->name('unassign_moderator');
     
     // ✅ USER ROLE MANAGEMENT
-    Route::post('/users/{userId}/promote-to-moderator', [ModeratorController::class, 'promoteToModerator'])->name('promote_moderator');
-    Route::post('/users/{userId}/demote-from-moderator', [ModeratorController::class, 'demoteFromModerator'])->name('demote_moderator');
-    Route::get('/users/eligible-for-moderation', [ModeratorController::class, 'getEligibleModerators'])->name('eligible_moderators');
+    Route::post('/users/{userId}/promote-to-moderator', [ModeratorController::class, 'promoteToModerator'])
+        ->name('promote_moderator');
+    Route::post('/users/{userId}/demote-from-moderator', [ModeratorController::class, 'demoteFromModerator'])
+        ->name('demote_moderator');
+    Route::get('/users/eligible-for-moderation', [ModeratorController::class, 'getEligibleModerators'])
+        ->name('eligible_moderators');
     
-    // ✅ COMMUNITY MANAGEMENT (yang sudah ada)
-    Route::get('/community/groups', [CommunityController::class, 'getGroups'])->name('community.get_groups');
-    Route::post('/community/groups', [CommunityController::class, 'createGroup'])->name('community.create_group');
-    Route::put('/community/groups/{groupId}', [CommunityController::class, 'updateGroup'])->name('community.update_group');
-    Route::delete('/community/groups/{groupId}', [CommunityController::class, 'deleteGroup'])->name('community.delete_group');
-    Route::post('/community/groups/{groupId}/approve', [CommunityController::class, 'approveGroup'])->name('community.approve_group');
-    Route::post('/community/groups/{groupId}/assign-moderator', [CommunityController::class, 'assignModerator'])->name('community.assign_moderator');
+    // ✅ COMMUNITY MANAGEMENT (Enhanced)
+    Route::get('/community/groups', [CommunityController::class, 'getGroups'])
+        ->name('community.get_groups');
+    Route::post('/community/groups', [CommunityController::class, 'createGroup'])
+        ->name('community.create_group');
+    Route::put('/community/groups/{groupId}', [CommunityController::class, 'updateGroup'])
+        ->name('community.update_group');
+    Route::delete('/community/groups/{groupId}', [CommunityController::class, 'deleteGroup'])
+        ->name('community.delete_group');
+    Route::post('/community/groups/{groupId}/approve', [CommunityController::class, 'approveGroup'])
+        ->name('community.approve_group');
+    Route::post('/community/groups/{groupId}/assign-moderator', [CommunityController::class, 'assignModerator'])
+        ->name('community.assign_moderator');
     
     // ✅ ADDITIONAL COMMUNITY API ROUTES
-    Route::get('/community/search', [CommunityController::class, 'searchMessages'])->name('community.search_messages');
-    Route::get('/community/trending', [CommunityController::class, 'getTrendingMessages'])->name('community.trending_messages');
-    Route::post('/community/report', [CommunityController::class, 'reportMessage'])->name('community.report_message');
+    Route::get('/community/search', [CommunityController::class, 'searchMessages'])
+        ->name('community.search_messages');
+    Route::get('/community/trending', [CommunityController::class, 'getTrendingMessages'])
+        ->name('community.trending_messages');
+    Route::post('/community/report', [CommunityController::class, 'reportMessage'])
+        ->name('community.report_message');
 });
 
 // ===================================================================
@@ -410,8 +433,17 @@ if (app()->environment('local')) {
         // ✅ TEST ROUTES
         Route::get('/debug/test-routes', function() {
             $routes = [
+                'Admin Dashboard' => [
+                    'GET /admin/dashboard' => route('admin.dashboard.index'),
+                ],
                 'Alumni Approval' => [
                     'GET /admin/alumni-approval' => route('admin.alumni-approval.index'),
+                ],
+                'Admin Payments' => [
+                    'GET /admin/payments' => route('admin.payments.index'),
+                ],
+                'Admin Submissions' => [
+                    'GET /admin/submissions' => route('admin.submissions.index'),
                 ],
                 'Community' => [
                     'GET /community' => route('community'),
