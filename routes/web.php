@@ -1,10 +1,12 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use Illuminate\Support\Facades\Auth; // ✅ PENTING: Tambahkan import Auth
-use Illuminate\Support\Facades\Schema; // ✅ PENTING: Tambahkan import Schema
-use Illuminate\Support\Facades\DB; // ✅ PENTING: Tambahkan import DB
-use Illuminate\Support\Facades\Hash; // ✅ PENTING: Tambahkan import Hash
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+
+// ✅ EXPLICIT CONTROLLER IMPORTS - FIXED
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ChatController;
@@ -13,10 +15,13 @@ use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\ModeratorController;
 use App\Http\Controllers\ContentSubmissionController;
 use App\Http\Controllers\PaymentController;
-use App\Http\Controllers\Admin\AlumniApprovalController; // ✅ Import sudah benar
-use App\Http\Controllers\Admin\DashboardController; // ✅ NEW: Import DashboardController
+use App\Http\Controllers\Admin\AlumniApprovalController;
+use App\Http\Controllers\Admin\DashboardController;
 
-// Rute default, bisa diarahkan ke halaman login atau register nantinya
+// ===================================================================
+// DEFAULT ROUTE
+// ===================================================================
+
 Route::get('/', function () {
     return view('welcome');
 });
@@ -25,22 +30,17 @@ Route::get('/', function () {
 // AUTHENTICATION ROUTES (No Middleware)
 // ===================================================================
 
-// Rute Registrasi Mahasiswa
 Route::get('/register/student', [AuthController::class, 'showRegisterStudentForm'])->name('register.student');
 Route::post('/register/student', [AuthController::class, 'registerStudent'])->name('register.store.student');
 
-// Rute Registrasi Alumni
 Route::get('/register/alumni', [AuthController::class, 'showRegisterAlumniForm'])->name('register.alumni');
 Route::post('/register/alumni', [AuthController::class, 'registerAlumni'])->name('register.store.alumni');
 
-// Rute Login
 Route::get('/login', [AuthController::class, 'showLoginForm'])->name('login');
 Route::post('/login', [AuthController::class, 'login'])->name('login.store');
 
-// Rute Logout
 Route::get('/logout', [AuthController::class, 'logout'])->name('logout');
 
-// Rute Halaman Notifikasi Verifikasi Alumni
 Route::get('/alumni/verification-pending', [AuthController::class, 'showAlumniVerificationPendingPage'])->name('alumni.verification.pending');
 
 // ===================================================================
@@ -59,21 +59,21 @@ Route::middleware('auth')->group(function () {
 
 Route::middleware(['auth'])->group(function () {
     
-    // ✅ CORE APPLICATION PAGES
+    // Core Application Pages
     Route::get('/home', [AuthController::class, 'showHomePage'])->name('home');
     Route::get('/match/setup', [AuthController::class, 'showMatchSetupForm'])->name('match.setup');
     Route::get('/find-people', [AuthController::class, 'showFindingPeoplePage'])->name('find.people');
     Route::get('/profile', [AuthController::class, 'showUserProfilePage'])->name('user.profile');
     
-    // ✅ USER INTERACTIONS
+    // User Interactions
     Route::post('/user/interact', [ProfileController::class, 'storeInteraction'])->name('user.interact');
     
-    // ✅ PERSONAL CHAT ROUTES
+    // Personal Chat Routes
     Route::get('/chat/personal', [ChatController::class, 'showPersonalChatPage'])->name('chat.personal');
     Route::post('/chat/send-message', [ChatController::class, 'sendMessage'])->name('chat.send_message');
     Route::get('/chat/messages', [ChatController::class, 'getMessages'])->name('chat.get_messages');
     
-    // ✅ NOTIFICATION ROUTES
+    // Notification Routes
     Route::get('/notifications/count', [NotificationController::class, 'getUnreadCount'])->name('notifications.count');
     Route::get('/notifications', [NotificationController::class, 'getNotifications'])->name('notifications.api');
     Route::post('/notifications/mark-read', [NotificationController::class, 'markAsRead'])->name('notifications.mark_read');
@@ -83,18 +83,18 @@ Route::middleware(['auth'])->group(function () {
 });
 
 // ===================================================================
-// ✅ ENHANCED COMMUNITY ROUTES (Complete Functionality)
+// ENHANCED COMMUNITY ROUTES (Complete Functionality)
 // ===================================================================
 
 Route::middleware(['auth'])->group(function () {
     
-    // ✅ BASIC COMMUNITY ROUTES (Enhanced with permission checking)
+    // Basic Community Routes
     Route::get('/community', [CommunityController::class, 'showCommunityChatPage'])->name('community');
     Route::post('/community/send-message', [CommunityController::class, 'sendGroupMessage'])->name('community.send_message');
     Route::get('/community/messages', [CommunityController::class, 'getMessages'])->name('community.get_messages');
     Route::get('/community/stats', [CommunityController::class, 'getStats'])->name('community.stats');
     
-    // ✅ REACTIONS & COMMENTS SYSTEM
+    // Reactions & Comments System
     Route::post('/community/reactions', [CommunityController::class, 'addReaction'])->name('community.add_reaction');
     Route::delete('/community/reactions/{messageId}', [CommunityController::class, 'removeReaction'])->name('community.remove_reaction');
     Route::get('/community/reactions/{messageId}', [CommunityController::class, 'getReactions'])->name('community.get_reactions');
@@ -104,21 +104,21 @@ Route::middleware(['auth'])->group(function () {
     Route::delete('/community/comments/{commentId}', [CommunityController::class, 'deleteComment'])->name('community.delete_comment');
     Route::put('/community/comments/{commentId}', [CommunityController::class, 'editComment'])->name('community.edit_comment');
     
-    // ✅ PERMISSION SYSTEM ROUTES
+    // Permission System Routes
     Route::get('/community/permissions', [CommunityController::class, 'getUserGroupPermissions'])->name('community.get_permissions');
     
-    // ✅ FILE MANAGEMENT ROUTES
+    // File Management Routes
     Route::delete('/community/attachments/{messageId}', [CommunityController::class, 'deleteAttachment'])->name('community.delete_attachment');
     Route::get('/community/attachments/{messageId}/download', [CommunityController::class, 'downloadAttachment'])->name('community.download_attachment');
 });
 
 // ===================================================================
-// ✅ CONTENT SUBMISSION ROUTES (User Routes)
+// CONTENT SUBMISSION ROUTES (User Routes)
 // ===================================================================
 
 Route::middleware(['auth'])->group(function () {
     
-    // ✅ USER SUBMISSION MANAGEMENT
+    // User Submission Management
     Route::get('/submissions', [ContentSubmissionController::class, 'index'])->name('submissions.index');
     Route::get('/submissions/create', [ContentSubmissionController::class, 'create'])->name('submissions.create');
     Route::post('/submissions', [ContentSubmissionController::class, 'store'])->name('submissions.store');
@@ -128,17 +128,17 @@ Route::middleware(['auth'])->group(function () {
     Route::delete('/submissions/{submission}', [ContentSubmissionController::class, 'destroy'])->name('submissions.destroy');
     Route::get('/submissions/{submission}/download', [ContentSubmissionController::class, 'downloadAttachment'])->name('submissions.download');
     
-    // ✅ API ROUTES
+    // API Routes
     Route::get('/api/submissions/stats', [ContentSubmissionController::class, 'getStats'])->name('api.submissions.stats');
 });
 
 // ===================================================================
-// ✅ PAYMENT ROUTES (User Routes)
+// PAYMENT ROUTES (User Routes)
 // ===================================================================
 
 Route::middleware(['auth'])->group(function () {
     
-    // ✅ USER PAYMENT MANAGEMENT
+    // User Payment Management
     Route::get('/payments/{submission}/create', [PaymentController::class, 'create'])->name('payments.create');
     Route::post('/payments/{submission}', [PaymentController::class, 'store'])->name('payments.store');
     Route::get('/payments/{payment}', [PaymentController::class, 'show'])->name('payments.show');
@@ -146,138 +146,101 @@ Route::middleware(['auth'])->group(function () {
     Route::put('/payments/{payment}', [PaymentController::class, 'update'])->name('payments.update');
     Route::get('/payments/{payment}/download-proof', [PaymentController::class, 'downloadProof'])->name('payments.download_proof');
     
-    // ✅ ADDED: User payment history & utilities
+    // User payment history & utilities
     Route::get('/payments/user/history', [PaymentController::class, 'userPayments'])->name('payments.user_history');
 });
 
 // ===================================================================
-// ✅ FIXED: ADMIN ROUTES - Mengganti Closure Middleware dengan Named Middleware
+// ✅ FIXED ADMIN ROUTES - EXPLICIT MIDDLEWARE CLASS
 // ===================================================================
 
-Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(function () {
+Route::middleware(['auth', \App\Http\Middleware\AdminOnlyMiddleware::class])->prefix('admin')->name('admin.')->group(function () {
     
-    // ✅ NEW: Integrated Admin Dashboard
-    Route::get('/dashboard', [DashboardController::class, 'index'])
-        ->name('dashboard.index');
-    Route::get('/dashboard/stats', [DashboardController::class, 'getStats'])
-        ->name('dashboard.stats');
-    Route::post('/dashboard/bulk-action', [DashboardController::class, 'bulkAction'])
-        ->name('dashboard.bulk_action');
-    Route::get('/dashboard/export', [DashboardController::class, 'exportData'])
-        ->name('dashboard.export');
+    // ✅ ADMIN DASHBOARD - EXPLICIT ROUTES
+    Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard.index');
+    Route::get('/dashboard/stats', [DashboardController::class, 'getStats'])->name('dashboard.stats');
+    Route::post('/dashboard/bulk-action', [DashboardController::class, 'bulkAction'])->name('dashboard.bulk_action');
+    Route::get('/dashboard/export', [DashboardController::class, 'exportData'])->name('dashboard.export');
     
-    // ✅ EXISTING: Submission Management (Enhanced)
-    Route::get('/submissions', [ContentSubmissionController::class, 'adminIndex'])
-        ->name('submissions.index');
-    Route::post('/submissions/{submission}/approve', [ContentSubmissionController::class, 'approve'])
-        ->name('submissions.approve');
-    Route::post('/submissions/{submission}/reject', [ContentSubmissionController::class, 'reject'])
-        ->name('submissions.reject');
-    Route::post('/submissions/{submission}/publish', [ContentSubmissionController::class, 'publish'])
-        ->name('submissions.publish');
+    // ✅ SUBMISSION MANAGEMENT - EXPLICIT ROUTES
+    Route::get('/submissions', [ContentSubmissionController::class, 'adminIndex'])->name('submissions.index');
+    Route::post('/submissions/{submission}/approve', [ContentSubmissionController::class, 'approve'])->name('submissions.approve');
+    Route::post('/submissions/{submission}/reject', [ContentSubmissionController::class, 'reject'])->name('submissions.reject');
+    Route::post('/submissions/{submission}/publish', [ContentSubmissionController::class, 'publish'])->name('submissions.publish');
     
-    // ✅ EXISTING: Payment Management (Enhanced)
-    Route::get('/payments', [PaymentController::class, 'adminIndex'])
-        ->name('payments.index');
-    Route::post('/payments/{payment}/confirm', [PaymentController::class, 'confirm'])
-        ->name('payments.confirm');
-    Route::post('/payments/{payment}/reject', [PaymentController::class, 'reject'])
-        ->name('payments.reject');
-    Route::post('/payments/bulk-action', [PaymentController::class, 'bulkAction'])
-        ->name('payments.bulk_action');
-    Route::get('/payments/export', [PaymentController::class, 'exportCsv'])
-        ->name('payments.export');
+    // ✅ PAYMENT MANAGEMENT - EXPLICIT ROUTES
+    Route::get('/payments', [PaymentController::class, 'adminIndex'])->name('payments.index');
+    Route::post('/payments/{payment}/confirm', [PaymentController::class, 'confirm'])->name('payments.confirm');
+    Route::post('/payments/{payment}/reject', [PaymentController::class, 'reject'])->name('payments.reject');
+    Route::post('/payments/bulk-action', [PaymentController::class, 'bulkAction'])->name('payments.bulk_action');
+    Route::get('/payments/export', [PaymentController::class, 'exportCsv'])->name('payments.export');
     
-    // ✅ FIXED: Alumni Approval - Menggunakan Named Middleware
-    Route::get('/alumni-approval', [AlumniApprovalController::class, 'index'])
-        ->name('alumni-approval.index');
-    Route::get('/alumni-approval/{id}', [AlumniApprovalController::class, 'show'])
-        ->name('alumni-approval.show');
-    Route::post('/alumni-approval/{id}/approve', [AlumniApprovalController::class, 'approve'])
-        ->name('alumni-approval.approve');
-    Route::post('/alumni-approval/{id}/reject', [AlumniApprovalController::class, 'reject'])
-        ->name('alumni-approval.reject');
-    Route::get('/alumni-approval/{id}/download', [AlumniApprovalController::class, 'downloadDocument'])
-        ->name('alumni-approval.download');
-    Route::post('/alumni-approval/refresh-cache', [AlumniApprovalController::class, 'refreshCache'])
-        ->name('alumni-approval.refresh-cache');
-    Route::get('/alumni-approval/stats', [AlumniApprovalController::class, 'getStats'])
-        ->name('alumni-approval.stats');
+    // ✅ ALUMNI APPROVAL - EXPLICIT ROUTES
+    Route::get('/alumni-approval', [AlumniApprovalController::class, 'index'])->name('alumni-approval.index');
+    Route::get('/alumni-approval/{id}', [AlumniApprovalController::class, 'show'])->name('alumni-approval.show');
+    Route::post('/alumni-approval/{id}/approve', [AlumniApprovalController::class, 'approve'])->name('alumni-approval.approve');
+    Route::post('/alumni-approval/{id}/reject', [AlumniApprovalController::class, 'reject'])->name('alumni-approval.reject');
+    Route::get('/alumni-approval/{id}/download', [AlumniApprovalController::class, 'downloadDocument'])->name('alumni-approval.download');
+    Route::post('/alumni-approval/refresh-cache', [AlumniApprovalController::class, 'refreshCache'])->name('alumni-approval.refresh-cache');
+    Route::get('/alumni-approval/stats', [AlumniApprovalController::class, 'getStats'])->name('alumni-approval.stats');
     
-    // ✅ API Routes for dashboard & analytics
-    Route::get('/api/payments/stats', [PaymentController::class, 'getStats'])
-        ->name('api.payments.stats');
-    Route::get('/api/payments/stats-by-date', [PaymentController::class, 'getStatsByDateRange'])
-        ->name('api.payments.stats_by_date');
+    // ✅ API ROUTES FOR DASHBOARD & ANALYTICS
+    Route::get('/api/payments/stats', [PaymentController::class, 'getStats'])->name('api.payments.stats');
+    Route::get('/api/payments/stats-by-date', [PaymentController::class, 'getStatsByDateRange'])->name('api.payments.stats_by_date');
     
-    // ✅ MODERATOR MANAGEMENT - Enhanced
-    Route::get('/moderators', [CommunityController::class, 'getAvailableModerators'])
-        ->name('get_moderators');
-    Route::post('/groups/{groupId}/assign-moderator', [CommunityController::class, 'assignModerator'])
-        ->name('assign_moderator');
-    Route::delete('/groups/{groupId}/unassign-moderator', [CommunityController::class, 'unassignModerator'])
-        ->name('unassign_moderator');
+    // ✅ MODERATOR MANAGEMENT
+    Route::get('/moderators', [CommunityController::class, 'getAvailableModerators'])->name('get_moderators');
+    Route::post('/groups/{groupId}/assign-moderator', [CommunityController::class, 'assignModerator'])->name('assign_moderator');
+    Route::delete('/groups/{groupId}/unassign-moderator', [CommunityController::class, 'unassignModerator'])->name('unassign_moderator');
     
     // ✅ USER ROLE MANAGEMENT
-    Route::post('/users/{userId}/promote-to-moderator', [ModeratorController::class, 'promoteToModerator'])
-        ->name('promote_moderator');
-    Route::post('/users/{userId}/demote-from-moderator', [ModeratorController::class, 'demoteFromModerator'])
-        ->name('demote_moderator');
-    Route::get('/users/eligible-for-moderation', [ModeratorController::class, 'getEligibleModerators'])
-        ->name('eligible_moderators');
+    Route::post('/users/{userId}/promote-to-moderator', [ModeratorController::class, 'promoteToModerator'])->name('promote_moderator');
+    Route::post('/users/{userId}/demote-from-moderator', [ModeratorController::class, 'demoteFromModerator'])->name('demote_moderator');
+    Route::get('/users/eligible-for-moderation', [ModeratorController::class, 'getEligibleModerators'])->name('eligible_moderators');
     
-    // ✅ COMMUNITY MANAGEMENT (Enhanced)
-    Route::get('/community/groups', [CommunityController::class, 'getGroups'])
-        ->name('community.get_groups');
-    Route::post('/community/groups', [CommunityController::class, 'createGroup'])
-        ->name('community.create_group');
-    Route::put('/community/groups/{groupId}', [CommunityController::class, 'updateGroup'])
-        ->name('community.update_group');
-    Route::delete('/community/groups/{groupId}', [CommunityController::class, 'deleteGroup'])
-        ->name('community.delete_group');
-    Route::post('/community/groups/{groupId}/approve', [CommunityController::class, 'approveGroup'])
-        ->name('community.approve_group');
-    Route::post('/community/groups/{groupId}/assign-moderator', [CommunityController::class, 'assignModerator'])
-        ->name('community.assign_moderator');
+    // ✅ COMMUNITY MANAGEMENT
+    Route::get('/community/groups', [CommunityController::class, 'getGroups'])->name('community.get_groups');
+    Route::post('/community/groups', [CommunityController::class, 'createGroup'])->name('community.create_group');
+    Route::put('/community/groups/{groupId}', [CommunityController::class, 'updateGroup'])->name('community.update_group');
+    Route::delete('/community/groups/{groupId}', [CommunityController::class, 'deleteGroup'])->name('community.delete_group');
+    Route::post('/community/groups/{groupId}/approve', [CommunityController::class, 'approveGroup'])->name('community.approve_group');
+    Route::post('/community/groups/{groupId}/assign-moderator', [CommunityController::class, 'assignModerator'])->name('community.assign_moderator');
     
     // ✅ ADDITIONAL COMMUNITY API ROUTES
-    Route::get('/community/search', [CommunityController::class, 'searchMessages'])
-        ->name('community.search_messages');
-    Route::get('/community/trending', [CommunityController::class, 'getTrendingMessages'])
-        ->name('community.trending_messages');
-    Route::post('/community/report', [CommunityController::class, 'reportMessage'])
-        ->name('community.report_message');
+    Route::get('/community/search', [CommunityController::class, 'searchMessages'])->name('community.search_messages');
+    Route::get('/community/trending', [CommunityController::class, 'getTrendingMessages'])->name('community.trending_messages');
+    Route::post('/community/report', [CommunityController::class, 'reportMessage'])->name('community.report_message');
 });
 
 // ===================================================================
-// ✅ MODERATOR-ONLY ROUTES (Moderator + Admin access)
+// MODERATOR-ONLY ROUTES (Moderator + Admin access)
 // ===================================================================
 
 Route::middleware(['auth'])->group(function () {
     
-    // ✅ MESSAGE MODERATION (for assigned communities only)
+    // Message Moderation (for assigned communities only)
     Route::delete('/community/messages/{messageId}', [CommunityController::class, 'deleteMessage'])->name('community.delete_message');
     Route::put('/community/messages/{messageId}', [CommunityController::class, 'editMessage'])->name('community.edit_message');
     Route::post('/community/messages/{messageId}/pin', [CommunityController::class, 'pinMessage'])->name('community.pin_message');
     Route::delete('/community/messages/{messageId}/pin', [CommunityController::class, 'unpinMessage'])->name('community.unpin_message');
     
-    // ✅ MODERATION DASHBOARD - Sementara tanpa middleware khusus
+    // Moderation Dashboard
     Route::get('/moderator/dashboard', [ModeratorController::class, 'dashboard'])->name('moderator.dashboard');
     Route::get('/moderator/communities', [ModeratorController::class, 'getMyCommunities'])->name('moderator.communities');
     Route::get('/moderator/reports', [ModeratorController::class, 'getReports'])->name('moderator.reports');
     Route::post('/moderator/reports/{reportId}/resolve', [ModeratorController::class, 'resolveReport'])->name('moderator.resolve_report');
     
-    // ✅ COMMUNITY STATISTICS for assigned communities
+    // Community Statistics for assigned communities
     Route::get('/moderator/stats/{groupId}', [ModeratorController::class, 'getCommunityStats'])->name('moderator.community_stats');
 });
 
 // ===================================================================
-// ✅ API ROUTES for Frontend Integration - FIXED
+// API ROUTES for Frontend Integration
 // ===================================================================
 
 Route::prefix('api')->middleware(['auth'])->group(function () {
     
-    // ✅ User Role Information - FIXED dengan try-catch
+    // User Role Information
     Route::get('/user/role-info', function() {
         try {
             $user = Auth::user();
@@ -301,7 +264,7 @@ Route::prefix('api')->middleware(['auth'])->group(function () {
         }
     })->name('api.user.role_info');
     
-    // ✅ Communities with Permission Info - FIXED dengan try-catch
+    // Communities with Permission Info
     Route::get('/communities/with-permissions', function() {
         try {
             $user = Auth::user();
@@ -333,10 +296,10 @@ Route::prefix('api')->middleware(['auth'])->group(function () {
         }
     })->name('api.communities.with_permissions');
     
-    // ✅ Payment Methods API
+    // Payment Methods API
     Route::get('/payment-methods', [PaymentController::class, 'getPaymentMethods'])->name('api.payment_methods');
     
-    // ✅ Submission Categories API - FIXED dengan try-catch
+    // Submission Categories API
     Route::get('/submission-categories', function() {
         try {
             if (class_exists('App\Models\SubmissionCategory')) {
@@ -350,7 +313,7 @@ Route::prefix('api')->middleware(['auth'])->group(function () {
         }
     })->name('api.submission_categories');
     
-    // ✅ User Statistics API - FIXED dengan try-catch
+    // User Statistics API
     Route::get('/user/stats', function() {
         try {
             $user = Auth::user();
@@ -369,17 +332,17 @@ Route::prefix('api')->middleware(['auth'])->group(function () {
 });
 
 // ===================================================================
-// ✅ ENHANCED DEBUG ROUTES (Development Only) - KEPT BUT SIMPLIFIED
+// DEBUG ROUTES (Development Only)
 // ===================================================================
 
 if (app()->environment('local')) {
     Route::middleware(['auth'])->group(function () {
         
-        // ✅ BASIC DEBUG ROUTES
+        // User Roles Debug
         Route::get('/debug/user-roles', function() {
             try {
                 $users = App\Models\User::select('id', 'full_name', 'role', 'is_verified')
-                                        ->limit(20) // Limit untuk safety
+                                        ->limit(20)
                                         ->get()
                                         ->map(function($user) {
                                             return [
@@ -407,7 +370,7 @@ if (app()->environment('local')) {
             }
         })->name('debug.user_roles');
         
-        // ✅ ALUMNI PENDING DEBUG
+        // Alumni Pending Debug
         Route::get('/debug/alumni-pending', function() {
             try {
                 $pendingAlumni = App\Models\User::where('role', 'alumni')
@@ -430,7 +393,7 @@ if (app()->environment('local')) {
             }
         })->name('debug.alumni_pending');
         
-        // ✅ TEST ROUTES
+        // Test Routes
         Route::get('/debug/test-routes', function() {
             $routes = [
                 'Admin Dashboard' => [
@@ -458,6 +421,67 @@ if (app()->environment('local')) {
                 'available_routes' => $routes,
             ], 200, [], JSON_PRETTY_PRINT);
         })->name('debug.test_routes');
+        
+        // ===================================================================
+        // ✅ ROUTE TEST SEDERHANA - EXPLICIT MIDDLEWARE
+        // ===================================================================
+        
+        // Test admin middleware
+        Route::middleware(['auth', \App\Http\Middleware\AdminOnlyMiddleware::class])->get('/admin/test', function() {
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Admin middleware bekerja!',
+                'user' => [
+                    'id' => auth()->id(),
+                    'role' => auth()->user()->role,
+                    'is_admin' => auth()->user()->isAdmin()
+                ]
+            ]);
+        })->name('admin.test');
+
+        // Test dashboard simple (tanpa model dependencies)
+        Route::middleware(['auth', \App\Http\Middleware\AdminOnlyMiddleware::class])->get('/admin/dashboard-simple', function() {
+            return view('admin.dashboard.index', [
+                'submissions' => collect([]),
+                'stats' => [
+                    'pending_payments' => 0,
+                    'pending_reviews' => 0, 
+                    'ready_to_publish' => 0,
+                    'today_revenue' => 0,
+                    'today_payments' => 0
+                ],
+                'categories' => collect([]),
+                'statusFilter' => 'all',
+                'categoryFilter' => 'all'
+            ]);
+        })->name('admin.dashboard.simple');
+        
+        // Test model SubmissionCategory
+        Route::middleware(['auth', \App\Http\Middleware\AdminOnlyMiddleware::class])->get('/admin/test-model', function() {
+            try {
+                // Test apakah SubmissionCategory model bisa di-load
+                if (class_exists('App\Models\SubmissionCategory')) {
+                    $categories = App\Models\SubmissionCategory::all();
+                    return response()->json([
+                        'status' => 'success',
+                        'message' => 'Model SubmissionCategory berhasil di-load',
+                        'categories_count' => $categories->count(),
+                        'categories' => $categories->take(5)
+                    ]);
+                } else {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Model SubmissionCategory tidak ditemukan'
+                    ]);
+                }
+            } catch (\Exception $e) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Error saat mengakses model: ' . $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+            }
+        })->name('admin.test.model');
         
     });
 }

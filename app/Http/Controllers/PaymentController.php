@@ -324,7 +324,7 @@ class PaymentController extends Controller
     // ===== ADMIN METHODS =====
 
     /**
-     * Display admin payment dashboard
+     * ✅ FIXED: Display admin payment dashboard with complete stats
      */
     public function adminIndex(Request $request)
     {
@@ -362,8 +362,8 @@ class PaymentController extends Controller
         
         $payments = $query->orderBy('created_at', 'desc')->paginate(15);
         
-        // Get statistics
-        $stats = Payment::getAdminStats();
+        // ✅ FIXED: Get comprehensive statistics that match view expectations
+        $stats = $this->getCompleteAdminStats();
         
         return view('admin.payments.index', compact(
             'payments', 
@@ -373,6 +373,95 @@ class PaymentController extends Controller
             'dateFrom',
             'dateTo'
         ));
+    }
+
+    /**
+     * ✅ NEW: Get complete admin statistics for view compatibility
+     */
+    private function getCompleteAdminStats()
+    {
+        // Get current month revenue
+        $revenueThisMonth = Payment::where('status', 'confirmed')
+            ->whereMonth('confirmed_at', now()->month)
+            ->whereYear('confirmed_at', now()->year)
+            ->sum('amount');
+
+        // Get last month revenue for comparison
+        $revenueLastMonth = Payment::where('status', 'confirmed')
+            ->whereMonth('confirmed_at', now()->subMonth()->month)
+            ->whereYear('confirmed_at', now()->subMonth()->year)
+            ->sum('amount');
+
+        // Calculate growth percentage
+        $revenueGrowth = 0;
+        if ($revenueLastMonth > 0) {
+            $revenueGrowth = round((($revenueThisMonth - $revenueLastMonth) / $revenueLastMonth) * 100, 1);
+        } elseif ($revenueThisMonth > 0) {
+            $revenueGrowth = 100;
+        }
+
+        // Get today's stats
+        $todayRevenue = Payment::where('status', 'confirmed')
+            ->whereDate('confirmed_at', today())
+            ->sum('amount');
+
+        $todayPayments = Payment::where('status', 'confirmed')
+            ->whereDate('confirmed_at', today())
+            ->count();
+
+        // Get week stats
+        $weekRevenue = Payment::where('status', 'confirmed')
+            ->whereBetween('confirmed_at', [now()->startOfWeek(), now()->endOfWeek()])
+            ->sum('amount');
+
+        $weekPayments = Payment::where('status', 'confirmed')
+            ->whereBetween('confirmed_at', [now()->startOfWeek(), now()->endOfWeek()])
+            ->count();
+
+        return [
+            // Basic counts
+            'total_payments' => Payment::count(),
+            'pending_payments' => Payment::where('status', 'pending')->count(),
+            'confirmed_payments' => Payment::where('status', 'confirmed')->count(),
+            'rejected_payments' => Payment::where('status', 'rejected')->count(),
+            
+            // Revenue stats
+            'total_revenue' => Payment::where('status', 'confirmed')->sum('amount'),
+            'revenue_this_month' => $revenueThisMonth,
+            'revenue_last_month' => $revenueLastMonth,
+            'revenue_growth' => $revenueGrowth,
+            'today_revenue' => $todayRevenue,
+            'week_revenue' => $weekRevenue,
+            
+            // Payment counts
+            'today_payments' => $todayPayments,
+            'week_payments' => $weekPayments,
+            'this_month_payments' => Payment::where('status', 'confirmed')
+                ->whereMonth('confirmed_at', now()->month)
+                ->whereYear('confirmed_at', now()->year)
+                ->count(),
+            
+            // Average stats
+            'average_payment_amount' => Payment::where('status', 'confirmed')
+                ->avg('amount') ?: 0,
+            
+            // Method breakdown
+            'method_breakdown' => Payment::where('status', 'confirmed')
+                ->selectRaw('payment_method, COUNT(*) as count, SUM(amount) as total')
+                ->groupBy('payment_method')
+                ->get()
+                ->mapWithKeys(function ($item) {
+                    return [$item->payment_method => [
+                        'count' => $item->count,
+                        'total' => $item->total
+                    ]];
+                }),
+                
+            // Recent activity
+            'recent_confirmations' => Payment::where('status', 'confirmed')
+                ->where('confirmed_at', '>=', now()->subHours(24))
+                ->count(),
+        ];
     }
 
     /**
@@ -520,7 +609,7 @@ class PaymentController extends Controller
             abort(403, 'Unauthorized access');
         }
 
-        $stats = Payment::getAdminStats();
+        $stats = $this->getCompleteAdminStats();
         
         return response()->json($stats);
     }
