@@ -373,8 +373,8 @@ class ContentSubmissionController extends Controller
             abort(403, 'Unauthorized access');
         }
 
-        // Get filters
-        $status = $request->get('status', 'pending_approval');
+        // ✅ FIXED: Ubah default filter dari 'pending_approval' ke 'all' agar menampilkan semua data
+        $status = $request->get('status', 'all'); // Dulu: 'pending_approval' -> Sekarang: 'all'
         $category = $request->get('category');
         $search = $request->get('search');
         $sort = $request->get('sort', 'created_at');
@@ -383,7 +383,7 @@ class ContentSubmissionController extends Controller
         // Build query
         $query = ContentSubmission::with(['user', 'category', 'payment']);
         
-        // Apply filters
+        // ✅ FIXED: Only apply status filter if not 'all'
         if ($status && $status !== 'all') {
             $query->where('status', $status);
         }

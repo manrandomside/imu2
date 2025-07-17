@@ -403,7 +403,7 @@ class Payment extends Model
     /**
      * ✅ ENHANCED: Reject payment - compatible dengan dashboard admin
      */
-    public function reject($rejectedBy, $reason)
+    public function reject($reason, $rejectedBy = null)
     {
         if (!$this->canBeRejected()) {
             throw new \Exception('Payment cannot be rejected in current status: ' . $this->status);
@@ -560,6 +560,128 @@ class Payment extends Model
         }
     }
 
+    /**
+     * ✅ NEW: Complete admin statistics for PaymentController compatibility
+     */
+    public static function getCompleteAdminStats()
+    {
+        try {
+            return Cache::remember('payment_complete_admin_stats', 300, function() {
+                // Get current month revenue
+                $revenueThisMonth = static::where('status', 'confirmed')
+                    ->whereMonth('confirmed_at', now()->month)
+                    ->whereYear('confirmed_at', now()->year)
+                    ->sum('amount') ?? 0;
+
+                // Get last month revenue for comparison
+                $revenueLastMonth = static::where('status', 'confirmed')
+                    ->whereMonth('confirmed_at', now()->subMonth()->month)
+                    ->whereYear('confirmed_at', now()->subMonth()->year)
+                    ->sum('amount') ?? 0;
+
+                // Calculate growth percentage
+                $revenueGrowth = 0;
+                if ($revenueLastMonth > 0) {
+                    $revenueGrowth = round((($revenueThisMonth - $revenueLastMonth) / $revenueLastMonth) * 100, 1);
+                } elseif ($revenueThisMonth > 0) {
+                    $revenueGrowth = 100;
+                }
+
+                // Get today's stats
+                $todayRevenue = static::where('status', 'confirmed')
+                    ->whereDate('confirmed_at', today())
+                    ->sum('amount') ?? 0;
+
+                $todayPayments = static::where('status', 'confirmed')
+                    ->whereDate('confirmed_at', today())
+                    ->count();
+
+                // Get week stats
+                $weekRevenue = static::where('status', 'confirmed')
+                    ->whereBetween('confirmed_at', [now()->startOfWeek(), now()->endOfWeek()])
+                    ->sum('amount') ?? 0;
+
+                $weekPayments = static::where('status', 'confirmed')
+                    ->whereBetween('confirmed_at', [now()->startOfWeek(), now()->endOfWeek()])
+                    ->count();
+
+                // Basic counts
+                $totalPayments = static::count();
+                $pendingPayments = static::where('status', 'pending')->count();
+                $confirmedPayments = static::where('status', 'confirmed')->count();
+                $rejectedPayments = static::where('status', 'rejected')->count();
+                $totalRevenue = static::where('status', 'confirmed')->sum('amount') ?? 0;
+
+                return [
+                    // Basic counts
+                    'total_payments' => $totalPayments,
+                    'pending_payments' => $pendingPayments,
+                    'confirmed_payments' => $confirmedPayments,
+                    'rejected_payments' => $rejectedPayments,
+                    
+                    // Revenue stats
+                    'total_revenue' => $totalRevenue,
+                    'revenue_this_month' => $revenueThisMonth,
+                    'revenue_last_month' => $revenueLastMonth,
+                    'revenue_growth' => $revenueGrowth,
+                    'today_revenue' => $todayRevenue,
+                    'week_revenue' => $weekRevenue,
+                    
+                    // Payment counts
+                    'today_payments' => $todayPayments,
+                    'week_payments' => $weekPayments,
+                    'this_month_payments' => static::where('status', 'confirmed')
+                        ->whereMonth('confirmed_at', now()->month)
+                        ->whereYear('confirmed_at', now()->year)
+                        ->count(),
+                    
+                    // Average stats
+                    'average_payment_amount' => $confirmedPayments > 0 ? $totalRevenue / $confirmedPayments : 0,
+                    
+                    // Method breakdown
+                    'method_breakdown' => static::where('status', 'confirmed')
+                        ->selectRaw('payment_method, COUNT(*) as count, SUM(amount) as total')
+                        ->groupBy('payment_method')
+                        ->get()
+                        ->mapWithKeys(function ($item) {
+                            return [$item->payment_method => [
+                                'count' => $item->count,
+                                'total' => $item->total
+                            ]];
+                        }),
+                        
+                    // Recent activity
+                    'recent_confirmations' => static::where('status', 'confirmed')
+                        ->where('confirmed_at', '>=', now()->subHours(24))
+                        ->count(),
+                ];
+            });
+        } catch (\Exception $e) {
+            Log::error('Failed to get complete admin payment stats', [
+                'error' => $e->getMessage()
+            ]);
+            
+            return [
+                'total_payments' => 0,
+                'pending_payments' => 0,
+                'confirmed_payments' => 0,
+                'rejected_payments' => 0,
+                'total_revenue' => 0,
+                'revenue_this_month' => 0,
+                'revenue_last_month' => 0,
+                'revenue_growth' => 0,
+                'today_revenue' => 0,
+                'week_revenue' => 0,
+                'today_payments' => 0,
+                'week_payments' => 0,
+                'this_month_payments' => 0,
+                'average_payment_amount' => 0,
+                'method_breakdown' => [],
+                'recent_confirmations' => 0,
+            ];
+        }
+    }
+
     public static function getUserStats($userId)
     {
         return [
@@ -663,6 +785,7 @@ class Payment extends Model
         Cache::forget('admin_pending_payments_' . $adminId);
         Cache::forget('admin_integrated_stats_' . $adminId);
         Cache::forget('payment_admin_stats');
+        Cache::forget('payment_complete_admin_stats');
         
         Log::info('Bulk payment confirmation completed', [
             'confirmed' => $confirmed,
@@ -705,7 +828,7 @@ class Payment extends Model
             }
             
             try {
-                $payment->reject($adminId, $reason);
+                $payment->reject($reason, $adminId);
                 $rejected++;
             } catch (\Exception $e) {
                 $errors[] = "Failed to reject payment ID {$paymentId}: " . $e->getMessage();
@@ -722,6 +845,7 @@ class Payment extends Model
             Cache::forget('admin_integrated_stats_' . $adminId);
         }
         Cache::forget('payment_admin_stats');
+        Cache::forget('payment_complete_admin_stats');
         
         Log::info('Bulk payment rejection completed', [
             'rejected' => $rejected,
@@ -855,6 +979,7 @@ class Payment extends Model
         static::created(function ($payment) {
             // Clear cache when new payment is created
             Cache::forget('payment_admin_stats');
+            Cache::forget('payment_complete_admin_stats');
             
             Log::info('Payment created', [
                 'payment_id' => $payment->id,
@@ -866,6 +991,7 @@ class Payment extends Model
         static::updated(function ($payment) {
             // Clear cache when payment is updated
             Cache::forget('payment_admin_stats');
+            Cache::forget('payment_complete_admin_stats');
             
             // Clear admin-specific cache if status changed
             if ($payment->isDirty('status')) {
@@ -883,6 +1009,7 @@ class Payment extends Model
             
             // Clear cache
             Cache::forget('payment_admin_stats');
+            Cache::forget('payment_complete_admin_stats');
             
             Log::info('Payment deleted', [
                 'payment_id' => $payment->id,

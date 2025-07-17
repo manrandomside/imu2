@@ -335,8 +335,8 @@ class PaymentController extends Controller
             abort(403, 'Unauthorized access');
         }
 
-        // Get filters
-        $status = $request->get('status', 'pending');
+        // ✅ FIXED: Ubah default filter dari 'pending' ke 'all' agar menampilkan semua data
+        $status = $request->get('status', 'all'); // Dulu: 'pending' -> Sekarang: 'all'
         $method = $request->get('method');
         $dateFrom = $request->get('date_from');
         $dateTo = $request->get('date_to');
@@ -344,6 +344,7 @@ class PaymentController extends Controller
         // Build query
         $query = Payment::with(['user', 'submission.category', 'confirmedBy']);
         
+        // ✅ FIXED: Only apply status filter if not 'all'
         if ($status && $status !== 'all') {
             $query->where('status', $status);
         }
