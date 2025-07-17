@@ -89,6 +89,14 @@ class User extends Authenticatable
         return $this->role === 'mahasiswa';
     }
 
+    /**
+     * ✅ NEW: Alias for isMahasiswa for better compatibility
+     */
+    public function isStudent()
+    {
+        return $this->isMahasiswa();
+    }
+
     public function isAlumni()
     {
         return $this->role === 'alumni';
@@ -97,6 +105,14 @@ class User extends Authenticatable
     public function isDosen()
     {
         return $this->role === 'tenaga_pendidik';
+    }
+
+    /**
+     * ✅ NEW: Check if user is tenaga pendidik (alias for better readability)
+     */
+    public function isTenagaPendidik()
+    {
+        return $this->isDosen();
     }
 
     /**
@@ -195,6 +211,16 @@ class User extends Authenticatable
         return $this->hasMany(ContentSubmission::class, 'approved_by');
     }
 
+    public function rejectedSubmissions()
+    {
+        return $this->hasMany(ContentSubmission::class, 'rejected_by');
+    }
+
+    public function publishedSubmissions()
+    {
+        return $this->hasMany(ContentSubmission::class, 'published_by');
+    }
+
     public function confirmedPayments()
     {
         return $this->hasMany(Payment::class, 'confirmed_by');
@@ -284,6 +310,54 @@ class User extends Authenticatable
     }
 
     /**
+     * ✅ NEW: Check if user can approve alumni registrations
+     */
+    public function canApproveAlumni()
+    {
+        return $this->isAdmin();
+    }
+
+    /**
+     * ✅ NEW: Check if user can access admin dashboard
+     */
+    public function canAccessAdminDashboard()
+    {
+        return $this->hasModeratorPrivileges();
+    }
+
+    /**
+     * ✅ NEW: Check if user can manage categories
+     */
+    public function canManageCategories()
+    {
+        return $this->isAdmin();
+    }
+
+    /**
+     * ✅ NEW: Check if user can manage users
+     */
+    public function canManageUsers()
+    {
+        return $this->isAdmin();
+    }
+
+    /**
+     * ✅ NEW: Check if user can view system logs
+     */
+    public function canViewSystemLogs()
+    {
+        return $this->isAdmin();
+    }
+
+    /**
+     * ✅ NEW: Check if user can export data
+     */
+    public function canExportData()
+    {
+        return $this->hasModeratorPrivileges();
+    }
+
+    /**
      * Check if user can moderate specific submission
      */
     public function canModerateSubmission($submission)
@@ -340,6 +414,32 @@ class User extends Authenticatable
     }
 
     /**
+     * ✅ NEW: Get admin statistics for dashboard
+     */
+    public function getAdminStats()
+    {
+        if (!$this->hasModeratorPrivileges()) {
+            return null;
+        }
+
+        $stats = [
+            'total_submissions' => ContentSubmission::count(),
+            'pending_approval' => ContentSubmission::where('status', 'pending_approval')->count(),
+            'approved_submissions' => ContentSubmission::where('status', 'approved')->count(),
+            'published_submissions' => ContentSubmission::where('status', 'published')->count(),
+            'rejected_submissions' => ContentSubmission::where('status', 'rejected')->count(),
+        ];
+
+        if ($this->isAdmin()) {
+            $stats['total_users'] = static::count();
+            $stats['verified_users'] = static::where('is_verified', true)->count();
+            $stats['pending_alumni'] = static::where('role', 'alumni')->where('is_verified', false)->count();
+        }
+
+        return $stats;
+    }
+
+    /**
      * Get unread notifications count
      */
     public function getUnreadNotificationsCount()
@@ -360,6 +460,53 @@ class User extends Authenticatable
         }
         
         return $initials;
+    }
+
+    /**
+     * ✅ NEW: Get user's full name with role for admin display
+     */
+    public function getFullNameWithRoleAttribute()
+    {
+        return $this->full_name . ' (' . $this->role_display . ')';
+    }
+
+    /**
+     * ✅ NEW: Check if user profile is complete
+     */
+    public function hasCompleteProfile()
+    {
+        $requiredFields = ['full_name', 'email', 'prodi', 'fakultas', 'gender'];
+        
+        foreach ($requiredFields as $field) {
+            if (empty($this->$field)) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+
+    /**
+     * ✅ NEW: Get missing profile fields
+     */
+    public function getMissingProfileFields()
+    {
+        $requiredFields = [
+            'full_name' => 'Nama Lengkap',
+            'email' => 'Email',
+            'prodi' => 'Program Studi',
+            'fakultas' => 'Fakultas',
+            'gender' => 'Jenis Kelamin'
+        ];
+        
+        $missing = [];
+        foreach ($requiredFields as $field => $label) {
+            if (empty($this->$field)) {
+                $missing[] = $label;
+            }
+        }
+        
+        return $missing;
     }
 
     // ===============================================
@@ -406,6 +553,11 @@ class User extends Authenticatable
         return $query->where('is_verified', true);
     }
 
+    public function scopeUnverified($query)
+    {
+        return $query->where('is_verified', false);
+    }
+
     public function scopeByRole($query, $role)
     {
         return $query->where('role', $role);
@@ -419,6 +571,28 @@ class User extends Authenticatable
     public function scopeByProdi($query, $prodi)
     {
         return $query->where('prodi', $prodi);
+    }
+
+    /**
+     * ✅ NEW: Additional useful scopes
+     */
+    public function scopeActive($query)
+    {
+        return $query->where('is_verified', true);
+    }
+
+    public function scopePendingVerification($query)
+    {
+        return $query->where('is_verified', false);
+    }
+
+    public function scopeWithCompleteProfile($query)
+    {
+        return $query->whereNotNull('full_name')
+                    ->whereNotNull('email')
+                    ->whereNotNull('prodi')
+                    ->whereNotNull('fakultas')
+                    ->whereNotNull('gender');
     }
 
     // ===============================================
@@ -448,6 +622,33 @@ class User extends Authenticatable
     }
 
     /**
+     * ✅ NEW: Get role hierarchy levels (for role upgrade logic)
+     */
+    public static function getRoleHierarchy()
+    {
+        return [
+            'mahasiswa' => 1,
+            'alumni' => 1,
+            'tenaga_pendidik' => 1,
+            'moderator' => 2,
+            'admin' => 3
+        ];
+    }
+
+    /**
+     * ✅ NEW: Check if role A can manage role B
+     */
+    public static function canRoleManage($managerRole, $targetRole)
+    {
+        $hierarchy = static::getRoleHierarchy();
+        
+        $managerLevel = $hierarchy[$managerRole] ?? 0;
+        $targetLevel = $hierarchy[$targetRole] ?? 0;
+        
+        return $managerLevel > $targetLevel;
+    }
+
+    /**
      * Create moderator user
      */
     public static function createModerator($data)
@@ -456,6 +657,35 @@ class User extends Authenticatable
             'role' => 'moderator',
             'is_verified' => true
         ]));
+    }
+
+    /**
+     * ✅ NEW: Create admin user
+     */
+    public static function createAdmin($data)
+    {
+        return self::create(array_merge($data, [
+            'role' => 'admin',
+            'is_verified' => true
+        ]));
+    }
+
+    /**
+     * ✅ NEW: Get users who can be promoted
+     */
+    public static function getPromotableUsers($currentUserRole = 'admin')
+    {
+        $hierarchy = static::getRoleHierarchy();
+        $currentLevel = $hierarchy[$currentUserRole] ?? 0;
+        
+        $promotableRoles = [];
+        foreach ($hierarchy as $role => $level) {
+            if ($level < $currentLevel) {
+                $promotableRoles[] = $role;
+            }
+        }
+        
+        return static::whereIn('role', $promotableRoles)->verified()->get();
     }
 
     // ===============================================
@@ -486,6 +716,52 @@ class User extends Authenticatable
     }
 
     /**
+     * ✅ NEW: Check if user can be deleted by current auth user
+     */
+    public function canBeDeletedBy($user)
+    {
+        // Users cannot delete themselves
+        if ($this->id === $user->id) {
+            return false;
+        }
+
+        // Only admin can delete users
+        if (!$user->isAdmin()) {
+            return false;
+        }
+
+        // Admin cannot delete other admins (safety)
+        if ($this->isAdmin() && $user->isAdmin()) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * ✅ NEW: Check if user can be edited by current auth user
+     */
+    public function canBeEditedBy($user)
+    {
+        // Users can edit themselves
+        if ($this->id === $user->id) {
+            return true;
+        }
+
+        // Admin can edit anyone
+        if ($user->isAdmin()) {
+            return true;
+        }
+
+        // Moderator can edit regular users only
+        if ($user->isModerator() && $this->isRegularUser()) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
      * Get role upgrade path suggestions
      */
     public function getRoleUpgradeSuggestions()
@@ -507,6 +783,30 @@ class User extends Authenticatable
         }
 
         return $suggestions;
+    }
+
+    /**
+     * ✅ NEW: Get user activity summary
+     */
+    public function getActivitySummary()
+    {
+        $summary = [
+            'total_submissions' => $this->submissions()->count(),
+            'approved_submissions' => $this->submissions()->where('status', 'approved')->count(),
+            'published_submissions' => $this->submissions()->where('status', 'published')->count(),
+            'total_payments' => $this->payments()->count(),
+            'confirmed_payments' => $this->payments()->where('status', 'confirmed')->count(),
+            'total_spent' => $this->payments()->where('status', 'confirmed')->sum('amount'),
+        ];
+
+        if ($this->hasModeratorPrivileges()) {
+            $summary['approved_others'] = $this->approvedSubmissions()->count();
+            $summary['rejected_others'] = $this->rejectedSubmissions()->count();
+            $summary['published_others'] = $this->publishedSubmissions()->count();
+            $summary['confirmed_payments_others'] = $this->confirmedPayments()->count();
+        }
+
+        return $summary;
     }
 
     // ===============================================
@@ -708,6 +1008,8 @@ class User extends Authenticatable
         echo "Can Create Submissions: " . ($this->canCreateSubmissions() ? 'YES' : 'NO') . "\n";
         echo "Can Manage Submissions: " . ($this->canManageSubmissions() ? 'YES' : 'NO') . "\n";
         echo "Can Manage Payments: " . ($this->canManagePayments() ? 'YES' : 'NO') . "\n";
+        echo "Can Approve Alumni: " . ($this->canApproveAlumni() ? 'YES' : 'NO') . "\n";
+        echo "Can Access Admin Dashboard: " . ($this->canAccessAdminDashboard() ? 'YES' : 'NO') . "\n";
         echo "============================================\n\n";
         
         return $this;

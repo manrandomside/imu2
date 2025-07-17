@@ -342,6 +342,16 @@ class ContentSubmission extends Model
         return $this->status === 'approved';
     }
 
+    /**
+     * ✅ NEW: Helper method to check if submission can be re-approved after rejection
+     */
+    public function canBeReapproved()
+    {
+        return $this->status === 'rejected' && 
+               $this->payment && 
+               $this->payment->status === 'confirmed';
+    }
+
     public function isPending()
     {
         return in_array($this->status, ['pending_payment', 'pending_approval']);
@@ -412,6 +422,7 @@ class ContentSubmission extends Model
                 'status' => 'approved',
                 'approved_at' => now(),
                 'approved_by' => $approvedBy,
+                // Clear rejection data if previously rejected
                 'rejection_reason' => null,
                 'rejected_at' => null,
                 'rejected_by' => null,
@@ -422,6 +433,7 @@ class ContentSubmission extends Model
                 Cache::forget('admin_pending_submissions_' . $approvedBy);
                 Cache::forget('admin_integrated_stats_' . $approvedBy);
             }
+            Cache::forget('submission_admin_stats');
 
             // Create notification for user
             if (class_exists('\App\Models\Notification')) {
@@ -441,11 +453,12 @@ class ContentSubmission extends Model
                 'title' => $this->title
             ]);
 
-            return true;
+            return $this;
 
         } catch (\Exception $e) {
             Log::error('Failed to approve submission', [
                 'submission_id' => $this->id,
+                'approved_by' => $approvedBy,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
@@ -455,9 +468,9 @@ class ContentSubmission extends Model
     }
 
     /**
-     * ✅ ENHANCED: reject() method dengan better tracking
+     * ✅ REVISED: reject() method dengan parameter order yang konsisten dengan approve()
      */
-    public function reject($reason, $rejectedBy = null)
+    public function reject($rejectedBy, $reason = null)
     {
         if (!$this->canBeRejected()) {
             throw new \Exception('Submission cannot be rejected in current status: ' . $this->status);
@@ -470,11 +483,14 @@ class ContentSubmission extends Model
         try {
             $this->update([
                 'status' => 'rejected',
-                'approved_by' => null,
-                'approved_at' => null,
-                'rejected_by' => $rejectedBy,
                 'rejected_at' => now(),
+                'rejected_by' => $rejectedBy,
                 'rejection_reason' => $reason,
+                // Clear approval data if previously approved
+                'approved_at' => null,
+                'approved_by' => null,
+                'published_at' => null,
+                'published_by' => null,
             ]);
 
             // Clear admin cache
@@ -482,6 +498,7 @@ class ContentSubmission extends Model
                 Cache::forget('admin_pending_submissions_' . $rejectedBy);
                 Cache::forget('admin_integrated_stats_' . $rejectedBy);
             }
+            Cache::forget('submission_admin_stats');
 
             // Create notification for user
             if (class_exists('\App\Models\Notification')) {
@@ -498,14 +515,16 @@ class ContentSubmission extends Model
             Log::info('Submission rejected successfully', [
                 'submission_id' => $this->id,
                 'rejected_by' => $rejectedBy,
-                'reason' => $reason
+                'reason' => $reason,
+                'title' => $this->title
             ]);
 
-            return true;
+            return $this;
 
         } catch (\Exception $e) {
             Log::error('Failed to reject submission', [
                 'submission_id' => $this->id,
+                'rejected_by' => $rejectedBy,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
@@ -556,6 +575,7 @@ class ContentSubmission extends Model
                     Cache::forget('admin_pending_submissions_' . $publishedBy);
                     Cache::forget('admin_integrated_stats_' . $publishedBy);
                 }
+                Cache::forget('submission_admin_stats');
 
                 // Create notification for user
                 if (class_exists('\App\Models\Notification')) {
@@ -575,7 +595,7 @@ class ContentSubmission extends Model
                     'title' => $this->title
                 ]);
 
-                return true;
+                return $this;
             } else {
                 throw new \Exception('Failed to publish content to community group');
             }
@@ -583,6 +603,7 @@ class ContentSubmission extends Model
         } catch (\Exception $e) {
             Log::error('Failed to publish submission', [
                 'submission_id' => $this->id,
+                'published_by' => $publishedBy,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
@@ -643,6 +664,45 @@ class ContentSubmission extends Model
             ]);
             
             return false;
+        }
+    }
+
+    /**
+     * ✅ NEW: Republish submission to community
+     */
+    public function republish($publishedBy = null)
+    {
+        if ($this->status !== 'published') {
+            throw new \Exception('Only published submissions can be republished');
+        }
+
+        try {
+            $result = $this->publishToGroup();
+            
+            if ($result) {
+                // Update timestamp
+                $this->update([
+                    'published_at' => now(),
+                    'published_by' => $publishedBy ?? $this->published_by
+                ]);
+
+                Log::info('Submission republished', [
+                    'submission_id' => $this->id,
+                    'republished_by' => $publishedBy
+                ]);
+
+                return $this;
+            } else {
+                throw new \Exception('Failed to republish submission to community');
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Failed to republish submission', [
+                'submission_id' => $this->id,
+                'error' => $e->getMessage()
+            ]);
+            
+            throw $e;
         }
     }
 
@@ -725,6 +785,82 @@ class ContentSubmission extends Model
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         ];
         return in_array($this->attachment_type, $spreadsheetTypes);
+    }
+
+    /**
+     * ✅ NEW: Helper method to get submission timeline
+     */
+    public function getTimelineAttribute()
+    {
+        $timeline = [];
+
+        // Creation step
+        $timeline[] = [
+            'status' => 'created',
+            'title' => 'Submission Created',
+            'description' => 'Content submission created',
+            'timestamp' => $this->created_at,
+            'completed' => true,
+            'admin' => 'System'
+        ];
+
+        // Payment step
+        if ($this->payment) {
+            $timeline[] = [
+                'status' => 'payment',
+                'title' => 'Payment Completed',
+                'description' => 'Payment confirmed by admin',
+                'timestamp' => $this->payment->confirmed_at ?? $this->payment->created_at,
+                'completed' => $this->payment->status === 'confirmed',
+                'admin' => $this->payment->confirmedBy->full_name ?? 'System'
+            ];
+        }
+
+        // Submission step
+        if ($this->submitted_at) {
+            $timeline[] = [
+                'status' => 'submitted',
+                'title' => 'Content Submitted',
+                'description' => 'Waiting for admin review',
+                'timestamp' => $this->submitted_at,
+                'completed' => true,
+                'admin' => 'System'
+            ];
+        }
+
+        // Approval or rejection step
+        if ($this->isApproved()) {
+            $timeline[] = [
+                'status' => 'approved',
+                'title' => 'Content Approved',
+                'description' => 'Content approved and ready for publication',
+                'timestamp' => $this->approved_at,
+                'completed' => true,
+                'admin' => $this->approvedBy->full_name ?? 'System'
+            ];
+        } elseif ($this->isRejected()) {
+            $timeline[] = [
+                'status' => 'rejected',
+                'title' => 'Content Rejected',
+                'description' => $this->rejection_reason,
+                'timestamp' => $this->rejected_at,
+                'completed' => true,
+                'admin' => $this->rejectedBy->full_name ?? 'System'
+            ];
+        }
+
+        if ($this->isPublished()) {
+            $timeline[] = [
+                'status' => 'published',
+                'title' => 'Content Published',
+                'description' => 'Content published to community',
+                'timestamp' => $this->published_at,
+                'completed' => true,
+                'admin' => $this->publishedBy->full_name ?? 'System'
+            ];
+        }
+
+        return $timeline;
     }
 
     /**
@@ -882,65 +1018,6 @@ class ContentSubmission extends Model
             $q->where('title', 'LIKE', "%{$query}%")
               ->orWhere('description', 'LIKE', "%{$query}%");
         });
-    }
-
-    /**
-     * ✅ ADDED: Dashboard integration methods
-     */
-    public function getTimelineData()
-    {
-        $timeline = [
-            [
-                'status' => 'created',
-                'title' => 'Submission Created',
-                'description' => 'Content submission created',
-                'timestamp' => $this->created_at,
-                'completed' => true
-            ]
-        ];
-
-        if ($this->submitted_at) {
-            $timeline[] = [
-                'status' => 'submitted',
-                'title' => 'Payment Confirmed',
-                'description' => 'Payment confirmed, waiting for approval',
-                'timestamp' => $this->submitted_at,
-                'completed' => true
-            ];
-        }
-
-        if ($this->isApproved()) {
-            $timeline[] = [
-                'status' => 'approved',
-                'title' => 'Content Approved',
-                'description' => 'Content approved by admin',
-                'timestamp' => $this->approved_at,
-                'completed' => true,
-                'admin' => $this->approvedBy->full_name ?? 'System'
-            ];
-        } elseif ($this->isRejected()) {
-            $timeline[] = [
-                'status' => 'rejected',
-                'title' => 'Content Rejected',
-                'description' => $this->rejection_reason,
-                'timestamp' => $this->rejected_at,
-                'completed' => true,
-                'admin' => $this->rejectedBy->full_name ?? 'System'
-            ];
-        }
-
-        if ($this->isPublished()) {
-            $timeline[] = [
-                'status' => 'published',
-                'title' => 'Content Published',
-                'description' => 'Content published to community',
-                'timestamp' => $this->published_at,
-                'completed' => true,
-                'admin' => $this->publishedBy->full_name ?? 'System'
-            ];
-        }
-
-        return $timeline;
     }
 
     /**

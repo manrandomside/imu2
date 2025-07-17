@@ -14,9 +14,6 @@ use App\Models\SubmissionCategory;
 use App\Models\Payment;
 use App\Models\Notification;
 
-// ✅ FIXED: Menghapus import PaymentController yang menyebabkan konflik
-// Jangan import PaymentController di sini karena menyebabkan class redeclaration error
-
 class ContentSubmissionController extends Controller
 {
     /**
@@ -443,7 +440,137 @@ class ContentSubmissionController extends Controller
     }
 
     /**
-     * ✅ ENHANCED: Approve submission - support JSON response
+     * ✅ Admin edit submission form
+     */
+    public function adminEdit(ContentSubmission $submission)
+    {
+        $user = Auth::user();
+        
+        if (!$user->hasModeratorPrivileges()) {
+            abort(403, 'Unauthorized access');
+        }
+
+        $submission->load(['category', 'payment', 'user']);
+        $categories = SubmissionCategory::getActiveCategories();
+        
+        return view('admin.submissions.edit', compact('submission', 'categories'));
+    }
+
+    /**
+     * ✅ Admin update submission
+     */
+    public function adminUpdate(Request $request, ContentSubmission $submission)
+    {
+        $user = Auth::user();
+        
+        if (!$user->hasModeratorPrivileges()) {
+            abort(403, 'Unauthorized access');
+        }
+
+        try {
+            $request->validate([
+                'title' => 'required|string|max:255',
+                'description' => 'required|string|min:50|max:5000',
+                'category_id' => 'required|exists:submission_categories,id',
+                'status' => 'required|in:pending_payment,pending_approval,approved,published,rejected',
+                'rejection_reason' => 'nullable|string|max:1000',
+                'attachment' => 'nullable|file|max:10240', // 10MB max
+            ], [
+                'title.required' => 'Judul wajib diisi.',
+                'description.required' => 'Deskripsi wajib diisi.',
+                'description.min' => 'Deskripsi minimal 50 karakter.',
+                'category_id.required' => 'Kategori wajib dipilih.',
+                'status.required' => 'Status wajib dipilih.',
+            ]);
+
+            // Handle file upload if new file provided
+            $updateData = [
+                'title' => $request->title,
+                'description' => $request->description,
+                'category_id' => $request->category_id,
+                'status' => $request->status,
+            ];
+
+            // Handle status-specific updates
+            if ($request->status === 'approved' && $submission->status !== 'approved') {
+                $updateData['approved_at'] = now();
+                $updateData['approved_by'] = $user->id;
+                $updateData['rejection_reason'] = null;
+                $updateData['rejected_at'] = null;
+                $updateData['rejected_by'] = null;
+            }
+
+            if ($request->status === 'rejected') {
+                $updateData['rejection_reason'] = $request->rejection_reason;
+                $updateData['rejected_at'] = now();
+                $updateData['rejected_by'] = $user->id;
+                $updateData['approved_at'] = null;
+                $updateData['approved_by'] = null;
+                $updateData['published_at'] = null;
+                $updateData['published_by'] = null;
+            }
+
+            if ($request->status === 'published' && $submission->status !== 'published') {
+                $updateData['published_at'] = now();
+                $updateData['published_by'] = $user->id;
+                
+                // Publish to community if not already published
+                if ($submission->status !== 'published') {
+                    $submission->publishToGroup();
+                }
+            }
+
+            // Handle new attachment upload
+            if ($request->hasFile('attachment')) {
+                // Delete old attachment
+                $submission->deleteAttachment();
+                
+                $file = $request->file('attachment');
+                $attachmentData = $this->handleFileUpload($file, 'submissions');
+                
+                $updateData = array_merge($updateData, [
+                    'attachment_path' => $attachmentData['path'],
+                    'attachment_type' => $attachmentData['type'],
+                    'attachment_name' => $attachmentData['name'],
+                    'attachment_size' => $attachmentData['size'],
+                ]);
+            }
+
+            $submission->update($updateData);
+
+            // Clear relevant cache
+            Cache::forget('admin_integrated_stats_' . $user->id);
+            Cache::forget('submission_admin_stats');
+
+            Log::info('Submission updated by admin', [
+                'submission_id' => $submission->id,
+                'admin_id' => $user->id,
+                'old_status' => $submission->getOriginal('status'),
+                'new_status' => $submission->status
+            ]);
+
+            return redirect()
+                ->route('admin.submissions.index')
+                ->with('success', 'Submission berhasil diperbarui!');
+
+        } catch (ValidationException $e) {
+            return back()->withErrors($e->errors())->withInput();
+        } catch (\Exception $e) {
+            Log::error('Error updating submission by admin', [
+                'submission_id' => $submission->id,
+                'admin_id' => $user->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return back()
+                ->withInput()
+                ->with('error', 'Terjadi kesalahan saat memperbarui submission.');
+        }
+    }
+
+    /**
+     * ✅ ENHANCED: Approve submission with better JSON response
      */
     public function approve(ContentSubmission $submission)
     {
@@ -476,6 +603,7 @@ class ContentSubmissionController extends Controller
             // Clear relevant cache
             Cache::forget('admin_integrated_stats_' . $user->id);
             Cache::forget('admin_pending_submissions_' . $user->id);
+            Cache::forget('submission_admin_stats');
 
             $message = 'Submission berhasil disetujui!';
             if (request()->expectsJson()) {
@@ -485,7 +613,7 @@ class ContentSubmissionController extends Controller
                     'submission' => [
                         'id' => $submission->id,
                         'status' => $submission->status,
-                        'approved_at' => $submission->updated_at
+                        'approved_at' => $submission->approved_at->toISOString()
                     ]
                 ]);
             }
@@ -494,7 +622,8 @@ class ContentSubmissionController extends Controller
         } catch (\Exception $e) {
             Log::error('Error approving submission', [
                 'submission_id' => $submission->id,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
 
             $message = 'Terjadi kesalahan saat menyetujui submission.';
@@ -506,7 +635,7 @@ class ContentSubmissionController extends Controller
     }
 
     /**
-     * Reject submission
+     * ✅ ENHANCED: Reject submission with flexible reason validation
      */
     public function reject(Request $request, ContentSubmission $submission)
     {
@@ -519,16 +648,19 @@ class ContentSubmissionController extends Controller
             abort(403, 'Unauthorized access');
         }
 
-        $request->validate([
-            'rejection_reason' => ['required', 'string', 'min:10', 'max:500']
-        ], [
-            'rejection_reason.required' => 'Alasan penolakan wajib diisi.',
-            'rejection_reason.min' => 'Alasan penolakan minimal 10 karakter.',
-            'rejection_reason.max' => 'Alasan penolakan maksimal 500 karakter.',
-        ]);
+        // ✅ ENHANCED: More flexible validation for reason
+        $reason = $request->input('reason') ?? $request->input('rejection_reason');
+        
+        if (empty($reason) || strlen(trim($reason)) < 3) {
+            $message = 'Alasan penolakan wajib diisi (minimal 3 karakter).';
+            if (request()->expectsJson()) {
+                return response()->json(['success' => false, 'message' => $message]);
+            }
+            return back()->with('error', $message);
+        }
 
         if (!$submission->canBeRejected()) {
-            $message = 'Konten tidak dapat ditolak pada status saat ini.';
+            $message = 'Submission tidak dapat ditolak pada status saat ini.';
             if (request()->expectsJson()) {
                 return response()->json(['success' => false, 'message' => $message]);
             }
@@ -536,19 +668,20 @@ class ContentSubmissionController extends Controller
         }
 
         try {
-            $submission->reject($request->rejection_reason, $user->id);
+            $submission->reject($user->id, trim($reason));
 
             Log::info('Submission rejected', [
                 'submission_id' => $submission->id,
                 'rejected_by' => $user->id,
-                'reason' => $request->rejection_reason
+                'reason' => $reason
             ]);
 
             // Clear relevant cache
             Cache::forget('admin_integrated_stats_' . $user->id);
             Cache::forget('admin_pending_submissions_' . $user->id);
+            Cache::forget('submission_admin_stats');
 
-            $message = 'Konten telah ditolak.';
+            $message = 'Submission berhasil ditolak.';
             if (request()->expectsJson()) {
                 return response()->json([
                     'success' => true, 
@@ -565,7 +698,8 @@ class ContentSubmissionController extends Controller
         } catch (\Exception $e) {
             Log::error('Error rejecting submission', [
                 'submission_id' => $submission->id,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
 
             $message = 'Terjadi kesalahan saat menolak submission.';
@@ -577,7 +711,7 @@ class ContentSubmissionController extends Controller
     }
 
     /**
-     * ✅ ENHANCED: Publish submission - support JSON response
+     * ✅ ENHANCED: Publish submission with better error handling
      */
     public function publish(ContentSubmission $submission)
     {
@@ -599,71 +733,352 @@ class ContentSubmissionController extends Controller
         }
 
         try {
-            $result = $submission->publishToGroup();
+            // Use the model's publish method
+            $submission->publish($user->id);
+
+            Log::info('Submission published', [
+                'submission_id' => $submission->id,
+                'published_by' => $user->id,
+                'title' => $submission->title
+            ]);
+
+            // Clear relevant cache
+            Cache::forget('admin_integrated_stats_' . $user->id);
+            Cache::forget('admin_pending_submissions_' . $user->id);
+            Cache::forget('submission_admin_stats');
             
-            if ($result) {
-                // Update submission status
-                $submission->update([
-                    'status' => 'published',
-                    'published_by' => $user->id,
-                    'published_at' => now()
-                ]);
+            // Increment today's approved count for stats
+            $todayKey = 'admin_total_approved_today';
+            $todayCount = Cache::get($todayKey, 0);
+            Cache::put($todayKey, $todayCount + 1, now()->endOfDay());
 
-                Log::info('Submission published', [
-                    'submission_id' => $submission->id,
-                    'published_by' => $user->id,
-                    'title' => $submission->title
-                ]);
-
-                // Clear relevant cache
-                Cache::forget('admin_integrated_stats_' . $user->id);
-                Cache::forget('admin_pending_submissions_' . $user->id);
-                
-                // Increment today's approved count for stats
-                $todayKey = 'admin_total_approved_today';
-                $todayCount = Cache::get($todayKey, 0);
-                Cache::put($todayKey, $todayCount + 1, now()->endOfDay());
-
-                // Create notification for user
-                if (class_exists('\App\Models\Notification')) {
-                    try {
-                        Notification::createSubmissionNotification($submission->id, 'submission_published');
-                    } catch (\Exception $e) {
-                        Log::warning('Failed to create submission publication notification', [
-                            'submission_id' => $submission->id,
-                            'error' => $e->getMessage()
-                        ]);
-                    }
-                }
-
-                $message = 'Submission berhasil dipublikasi ke komunitas!';
-                if (request()->expectsJson()) {
-                    return response()->json([
-                        'success' => true, 
-                        'message' => $message,
-                        'submission' => [
-                            'id' => $submission->id,
-                            'status' => $submission->status,
-                            'published_at' => $submission->updated_at
-                        ]
+            // Create notification for user
+            if (class_exists('\App\Models\Notification')) {
+                try {
+                    Notification::createSubmissionNotification($submission->id, 'submission_published');
+                } catch (\Exception $e) {
+                    Log::warning('Failed to create submission publication notification', [
+                        'submission_id' => $submission->id,
+                        'error' => $e->getMessage()
                     ]);
                 }
-                return back()->with('success', $message);
-            } else {
-                $message = 'Gagal mempublikasikan konten ke komunitas.';
-                if (request()->expectsJson()) {
-                    return response()->json(['success' => false, 'message' => $message]);
-                }
-                return back()->with('error', $message);
             }
+
+            $message = 'Submission berhasil dipublikasi ke komunitas!';
+            if (request()->expectsJson()) {
+                return response()->json([
+                    'success' => true, 
+                    'message' => $message,
+                    'submission' => [
+                        'id' => $submission->id,
+                        'status' => $submission->status,
+                        'published_at' => $submission->published_at->toISOString()
+                    ]
+                ]);
+            }
+            return back()->with('success', $message);
 
         } catch (\Exception $e) {
             Log::error('Error publishing submission', [
                 'submission_id' => $submission->id,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
 
             $message = 'Terjadi kesalahan saat mempublikasi submission.';
+            if (request()->expectsJson()) {
+                return response()->json(['success' => false, 'message' => $message], 500);
+            }
+            return back()->with('error', $message);
+        }
+    }
+
+    /**
+     * ✅ Republish submission to community
+     */
+    public function republish(ContentSubmission $submission)
+    {
+        $user = Auth::user();
+        
+        if (!$user->hasModeratorPrivileges()) {
+            if (request()->expectsJson()) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+            }
+            abort(403, 'Unauthorized access');
+        }
+
+        if ($submission->status !== 'published') {
+            $message = 'Hanya submission yang sudah dipublikasi yang dapat di-republish.';
+            if (request()->expectsJson()) {
+                return response()->json(['success' => false, 'message' => $message]);
+            }
+            return back()->with('error', $message);
+        }
+
+        try {
+            // Use the model's republish method
+            $submission->republish($user->id);
+
+            Log::info('Submission republished', [
+                'submission_id' => $submission->id,
+                'republished_by' => $user->id
+            ]);
+
+            $message = 'Submission berhasil di-republish ke komunitas!';
+            if (request()->expectsJson()) {
+                return response()->json(['success' => true, 'message' => $message]);
+            }
+            return back()->with('success', $message);
+
+        } catch (\Exception $e) {
+            Log::error('Error republishing submission', [
+                'submission_id' => $submission->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            $message = 'Terjadi kesalahan saat republish submission.';
+            if (request()->expectsJson()) {
+                return response()->json(['success' => false, 'message' => $message], 500);
+            }
+            return back()->with('error', $message);
+        }
+    }
+
+    /**
+     * ✅ Bulk action for submissions
+     */
+    public function bulkAction(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user->hasModeratorPrivileges()) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
+
+        $request->validate([
+            'action' => 'required|in:approve,reject,publish,delete',
+            'submission_ids' => 'required|array',
+            'submission_ids.*' => 'exists:content_submissions,id',
+            'rejection_reason' => 'required_if:action,reject|string|max:1000'
+        ]);
+
+        try {
+            $submissions = ContentSubmission::whereIn('id', $request->submission_ids)->get();
+            $count = 0;
+
+            foreach ($submissions as $submission) {
+                switch ($request->action) {
+                    case 'approve':
+                        if ($submission->canBeApproved()) {
+                            $submission->approve($user->id);
+                            $count++;
+                        }
+                        break;
+                        
+                    case 'reject':
+                        if ($submission->canBeRejected()) {
+                            $submission->reject($user->id, $request->rejection_reason);
+                            $count++;
+                        }
+                        break;
+                        
+                    case 'publish':
+                        if ($submission->canBePublished()) {
+                            $submission->publish($user->id);
+                            $count++;
+                        }
+                        break;
+                        
+                    case 'delete':
+                        if ($submission->canBeDeleted()) {
+                            $submission->delete();
+                            $count++;
+                        }
+                        break;
+                }
+            }
+
+            // Clear cache
+            Cache::forget('admin_integrated_stats_' . $user->id);
+            Cache::forget('submission_admin_stats');
+
+            return response()->json([
+                'success' => true,
+                'message' => "{$count} submission berhasil diproses."
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Error in bulk action', [
+                'action' => $request->action,
+                'submission_ids' => $request->submission_ids,
+                'error' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Terjadi kesalahan saat memproses bulk action.'
+            ], 500);
+        }
+    }
+
+    /**
+     * ✅ Export submissions data
+     */
+    public function export(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user->hasModeratorPrivileges()) {
+            abort(403, 'Unauthorized access');
+        }
+
+        try {
+            $query = ContentSubmission::with(['user', 'category', 'payment']);
+            
+            // Apply filters if provided
+            if ($request->status && $request->status !== 'all') {
+                $query->where('status', $request->status);
+            }
+            
+            if ($request->category) {
+                $query->where('category_id', $request->category);
+            }
+            
+            if ($request->date_from) {
+                $query->whereDate('created_at', '>=', $request->date_from);
+            }
+            
+            if ($request->date_to) {
+                $query->whereDate('created_at', '<=', $request->date_to);
+            }
+
+            $submissions = $query->orderBy('created_at', 'desc')->get();
+
+            // Generate CSV
+            $filename = 'submissions_export_' . now()->format('Y-m-d_H-i-s') . '.csv';
+            $headers = [
+                'Content-Type' => 'text/csv',
+                'Content-Disposition' => "attachment; filename=\"{$filename}\"",
+            ];
+
+            $callback = function() use ($submissions) {
+                $file = fopen('php://output', 'w');
+                
+                // CSV Headers
+                fputcsv($file, [
+                    'ID',
+                    'Judul',
+                    'Deskripsi',
+                    'Kategori',
+                    'User',
+                    'Email User',
+                    'Status',
+                    'Payment Amount',
+                    'Payment Status',
+                    'Tanggal Dibuat',
+                    'Tanggal Disetujui',
+                    'Tanggal Dipublikasi'
+                ]);
+
+                foreach ($submissions as $submission) {
+                    fputcsv($file, [
+                        $submission->id,
+                        $submission->title,
+                        Str::limit($submission->description, 100),
+                        $submission->category->name ?? 'N/A',
+                        $submission->user->full_name,
+                        $submission->user->email,
+                        $submission->status,
+                        $submission->payment ? $submission->payment->amount : 'N/A',
+                        $submission->payment ? $submission->payment->status : 'N/A',
+                        $submission->created_at->format('Y-m-d H:i:s'),
+                        $submission->approved_at ? $submission->approved_at->format('Y-m-d H:i:s') : 'N/A',
+                        $submission->published_at ? $submission->published_at->format('Y-m-d H:i:s') : 'N/A'
+                    ]);
+                }
+
+                fclose($file);
+            };
+
+            return response()->stream($callback, 200, $headers);
+
+        } catch (\Exception $e) {
+            Log::error('Error exporting submissions', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return back()->with('error', 'Terjadi kesalahan saat mengekspor data.');
+        }
+    }
+
+    /**
+     * ✅ Preview submission content
+     */
+    public function preview(ContentSubmission $submission)
+    {
+        $user = Auth::user();
+        
+        if (!$user->hasModeratorPrivileges()) {
+            abort(403, 'Unauthorized access');
+        }
+
+        $submission->load(['category', 'payment', 'user']);
+        
+        return view('admin.submissions.preview', compact('submission'));
+    }
+
+    /**
+     * ✅ Duplicate submission
+     */
+    public function duplicate(ContentSubmission $submission)
+    {
+        $user = Auth::user();
+        
+        if (!$user->hasModeratorPrivileges()) {
+            if (request()->expectsJson()) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+            }
+            abort(403, 'Unauthorized access');
+        }
+
+        try {
+            $duplicated = ContentSubmission::create([
+                'user_id' => $submission->user_id,
+                'category_id' => $submission->category_id,
+                'title' => $submission->title . ' (Copy)',
+                'description' => $submission->description,
+                'attachment_path' => $submission->attachment_path,
+                'attachment_type' => $submission->attachment_type,
+                'attachment_name' => $submission->attachment_name,
+                'attachment_size' => $submission->attachment_size,
+                'status' => 'pending_payment',
+            ]);
+
+            Log::info('Submission duplicated', [
+                'original_id' => $submission->id,
+                'duplicated_id' => $duplicated->id,
+                'duplicated_by' => $user->id
+            ]);
+
+            $message = 'Submission berhasil diduplikasi!';
+            if (request()->expectsJson()) {
+                return response()->json([
+                    'success' => true, 
+                    'message' => $message,
+                    'duplicated_id' => $duplicated->id
+                ]);
+            }
+            return back()->with('success', $message);
+
+        } catch (\Exception $e) {
+            Log::error('Error duplicating submission', [
+                'submission_id' => $submission->id,
+                'error' => $e->getMessage()
+            ]);
+
+            $message = 'Terjadi kesalahan saat menduplikasi submission.';
             if (request()->expectsJson()) {
                 return response()->json(['success' => false, 'message' => $message], 500);
             }
@@ -820,6 +1235,53 @@ class ContentSubmissionController extends Controller
             return response()->json([
                 'user_stats' => $stats,
             ]);
+        }
+    }
+
+    /**
+     * ✅ Get admin statistics for API (separate method)
+     */
+    public function getAdminStats(Request $request)
+    {
+        $user = Auth::user();
+        
+        if (!$user->hasModeratorPrivileges()) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        try {
+            $stats = ContentSubmission::getAdminStats();
+            
+            // Add additional statistics
+            $todayStats = [
+                'today_submissions' => ContentSubmission::whereDate('created_at', today())->count(),
+                'today_approved' => ContentSubmission::whereDate('approved_at', today())->count(),
+                'today_published' => ContentSubmission::whereDate('published_at', today())->count(),
+                'today_revenue' => 0
+            ];
+
+            // Get today's revenue if Payment model exists
+            if (class_exists('\App\Models\Payment')) {
+                $todayStats['today_revenue'] = Payment::where('status', 'confirmed')
+                    ->whereDate('updated_at', today())
+                    ->sum('amount') ?? 0;
+            }
+
+            return response()->json([
+                'success' => true,
+                'stats' => array_merge($stats, $todayStats)
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Error getting admin stats', [
+                'error' => $e->getMessage(),
+                'admin_id' => $user->id
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'error' => 'Failed to get statistics'
+            ], 500);
         }
     }
 }
