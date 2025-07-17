@@ -475,6 +475,8 @@
 
 @push('scripts')
 <script>
+// ✅ COMPLETE FIXED JAVASCRIPT FOR ADMIN SUBMISSIONS
+
 // Enhanced Modal functions
 function openApprovalModal(submissionId, title) {
     document.getElementById('approval-title').textContent = title;
@@ -496,7 +498,7 @@ function closeRejectionModal() {
     document.getElementById('rejection-modal').classList.add('hidden');
 }
 
-// New enhanced functions
+// ✅ FIXED: Main action functions with proper error handling
 function approveSubmission(id, title) {
     if (confirm(`Setujui submission "${title}"?`)) {
         showLoading();
@@ -504,27 +506,34 @@ function approveSubmission(id, title) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content'),
+                'Accept': 'application/json'
             }
         })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            return response.json();
+        })
         .then(data => {
             hideLoading();
             if (data.success) {
                 showToast('Submission berhasil disetujui!', 'success');
-                setTimeout(() => location.reload(), 1000);
+                setTimeout(() => location.reload(), 1500);
             } else {
-                showToast(data.message || 'Terjadi kesalahan', 'error');
+                showToast(data.message || 'Terjadi kesalahan saat menyetujui submission', 'error');
             }
         })
         .catch(error => {
             hideLoading();
-            console.error('Error:', error);
-            showToast('Terjadi kesalahan saat menyetujui submission', 'error');
+            console.error('Error approving submission:', error);
+            showToast('Terjadi kesalahan saat menyetujui submission: ' + error.message, 'error');
         });
     }
 }
 
+// ✅ FIXED: Enhanced publishSubmission with better error handling
 function publishSubmission(id, title) {
     if (confirm(`Publikasikan submission "${title}" ke komunitas?`)) {
         showLoading();
@@ -532,23 +541,31 @@ function publishSubmission(id, title) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content'),
+                'Accept': 'application/json'
             }
         })
-        .then(response => response.json())
+        .then(response => {
+            console.log('Publish response status:', response.status);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            return response.json();
+        })
         .then(data => {
             hideLoading();
+            console.log('Publish response data:', data);
             if (data.success) {
-                showToast('Submission berhasil dipublikasikan!', 'success');
-                setTimeout(() => location.reload(), 1000);
+                showToast('Submission berhasil dipublikasikan ke komunitas!', 'success');
+                setTimeout(() => location.reload(), 1500);
             } else {
-                showToast(data.message || 'Terjadi kesalahan', 'error');
+                showToast(data.message || 'Gagal mempublikasikan submission', 'error');
             }
         })
         .catch(error => {
             hideLoading();
-            console.error('Error:', error);
-            showToast('Terjadi kesalahan saat mempublikasikan submission', 'error');
+            console.error('Error publishing submission:', error);
+            showToast('Terjadi kesalahan saat mempublikasikan submission: ' + error.message, 'error');
         });
     }
 }
@@ -560,23 +577,29 @@ function republishSubmission(id, title) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content'),
+                'Accept': 'application/json'
             }
         })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            return response.json();
+        })
         .then(data => {
             hideLoading();
             if (data.success) {
                 showToast('Submission berhasil di-republish!', 'success');
-                setTimeout(() => location.reload(), 1000);
+                setTimeout(() => location.reload(), 1500);
             } else {
                 showToast(data.message || 'Terjadi kesalahan', 'error');
             }
         })
         .catch(error => {
             hideLoading();
-            console.error('Error:', error);
-            showToast('Terjadi kesalahan saat republish submission', 'error');
+            console.error('Error republishing submission:', error);
+            showToast('Terjadi kesalahan saat republish submission: ' + error.message, 'error');
         });
     }
 }
@@ -593,28 +616,92 @@ function reapproveSubmission(id, title) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content'),
+                'Accept': 'application/json'
             }
         })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            return response.json();
+        })
         .then(data => {
             hideLoading();
             if (data.success) {
                 showToast('Submission berhasil di-approve kembali!', 'success');
-                setTimeout(() => location.reload(), 1000);
+                setTimeout(() => location.reload(), 1500);
             } else {
                 showToast(data.message || 'Terjadi kesalahan', 'error');
             }
         })
         .catch(error => {
             hideLoading();
-            console.error('Error:', error);
-            showToast('Terjadi kesalahan saat re-approve submission', 'error');
+            console.error('Error re-approving submission:', error);
+            showToast('Terjadi kesalahan saat re-approve submission: ' + error.message, 'error');
         });
     }
 }
 
-// Bulk actions
+// ✅ CRITICAL FIX: Add missing processBulkAction function
+function processBulkAction(action) {
+    const checkboxes = document.querySelectorAll('.submission-checkbox:checked');
+    const submissionIds = Array.from(checkboxes).map(cb => cb.value);
+    
+    if (submissionIds.length === 0) {
+        showToast('Pilih minimal satu submission untuk ' + action, 'warning');
+        return;
+    }
+
+    let confirmMessage = `${action.charAt(0).toUpperCase() + action.slice(1)} ${submissionIds.length} submission?`;
+    
+    if (action === 'publish') {
+        confirmMessage = `Publikasikan ${submissionIds.length} submission ke komunitas?`;
+    }
+    
+    if (confirm(confirmMessage)) {
+        showLoading();
+        
+        const requestBody = {
+            action: action,
+            submission_ids: submissionIds
+        };
+
+        fetch('/admin/submissions/bulk-action', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content'),
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify(requestBody)
+        })
+        .then(response => {
+            console.log('Bulk action response status:', response.status);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            hideLoading();
+            console.log('Bulk action response data:', data);
+            if (data.success) {
+                showToast(data.message || `Bulk ${action} berhasil!`, 'success');
+                setTimeout(() => location.reload(), 1500);
+            } else {
+                showToast(data.message || `Gagal melakukan bulk ${action}`, 'error');
+            }
+        })
+        .catch(error => {
+            hideLoading();
+            console.error('Error in bulk action:', error);
+            showToast(`Terjadi kesalahan saat melakukan bulk ${action}: ` + error.message, 'error');
+        });
+    }
+}
+
+// Bulk selection functions
 function updateBulkControls() {
     const checkboxes = document.querySelectorAll('.submission-checkbox:checked');
     const bulkControls = document.getElementById('bulk-controls');
@@ -701,24 +788,30 @@ function executeBulkAction(action) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content'),
+                'Accept': 'application/json'
             },
             body: JSON.stringify(requestBody)
         })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            return response.json();
+        })
         .then(data => {
             hideLoading();
             if (data.success) {
                 showToast(data.message, 'success');
-                setTimeout(() => location.reload(), 1000);
+                setTimeout(() => location.reload(), 1500);
             } else {
                 showToast(data.message || 'Terjadi kesalahan', 'error');
             }
         })
         .catch(error => {
             hideLoading();
-            console.error('Error:', error);
-            showToast('Terjadi kesalahan saat memproses bulk action', 'error');
+            console.error('Error in bulk action:', error);
+            showToast('Terjadi kesalahan saat memproses bulk action: ' + error.message, 'error');
         });
     }
 }
@@ -742,53 +835,96 @@ function exportSubmissions() {
     showToast('Export dimulai, file akan didownload otomatis', 'success');
 }
 
-// Utility functions
+// ✅ ENHANCED: Utility functions with better UX
 function showLoading() {
-    document.getElementById('loading-overlay').classList.remove('hidden');
+    const loadingOverlay = document.getElementById('loading-overlay');
+    if (loadingOverlay) {
+        loadingOverlay.classList.remove('hidden');
+    }
 }
 
 function hideLoading() {
-    document.getElementById('loading-overlay').classList.add('hidden');
+    const loadingOverlay = document.getElementById('loading-overlay');
+    if (loadingOverlay) {
+        loadingOverlay.classList.add('hidden');
+    }
 }
 
 function showToast(message, type = 'info') {
+    // Remove existing toast if any
+    const existingToast = document.getElementById('dynamic-toast');
+    if (existingToast) {
+        existingToast.remove();
+    }
+    
     const toast = document.createElement('div');
+    toast.id = 'dynamic-toast';
+    
     const bgColor = type === 'success' ? 'bg-green-500' : 
                    type === 'error' ? 'bg-red-500' : 
                    type === 'warning' ? 'bg-yellow-500' : 'bg-blue-500';
     
-    toast.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg z-50 text-white ${bgColor}`;
-    toast.textContent = message;
+    const icon = type === 'success' ? '✅' : 
+                type === 'error' ? '❌' : 
+                type === 'warning' ? '⚠️' : 'ℹ️';
+    
+    toast.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg z-50 text-white ${bgColor} transform transition-all duration-300 translate-x-full`;
+    toast.innerHTML = `
+        <div class="flex items-center space-x-2">
+            <span>${icon}</span>
+            <span>${message}</span>
+        </div>
+    `;
     
     document.body.appendChild(toast);
     
+    // Animate in
     setTimeout(() => {
-        toast.remove();
-    }, 3000);
+        toast.classList.remove('translate-x-full');
+    }, 100);
+    
+    // Animate out and remove
+    setTimeout(() => {
+        toast.classList.add('translate-x-full');
+        setTimeout(() => {
+            if (toast.parentNode) {
+                toast.remove();
+            }
+        }, 300);
+    }, 4000);
 }
 
-// Close modals when clicking outside
-document.getElementById('approval-modal').addEventListener('click', function(e) {
-    if (e.target === this) {
-        closeApprovalModal();
-    }
-});
-
-document.getElementById('rejection-modal').addEventListener('click', function(e) {
-    if (e.target === this) {
-        closeRejectionModal();
-    }
-});
-
-document.getElementById('bulk-action-modal').addEventListener('click', function(e) {
-    if (e.target === this) {
-        closeBulkActionModal();
-    }
-});
-
-// Initialize
+// ✅ Enhanced modal event listeners
 document.addEventListener('DOMContentLoaded', function() {
+    // Close modals when clicking outside
+    const modals = ['approval-modal', 'rejection-modal', 'bulk-action-modal'];
+    modals.forEach(modalId => {
+        const modal = document.getElementById(modalId);
+        if (modal) {
+            modal.addEventListener('click', function(e) {
+                if (e.target === this) {
+                    if (modalId === 'approval-modal') closeApprovalModal();
+                    if (modalId === 'rejection-modal') closeRejectionModal();
+                    if (modalId === 'bulk-action-modal') closeBulkActionModal();
+                }
+            });
+        }
+    });
+    
+    // Initialize bulk controls
     updateBulkControls();
+    
+    // Add keyboard shortcuts
+    document.addEventListener('keydown', function(e) {
+        // Escape key closes modals
+        if (e.key === 'Escape') {
+            closeApprovalModal();
+            closeRejectionModal();
+            closeBulkActionModal();
+        }
+    });
+    
+    console.log('✅ Admin submissions JavaScript loaded successfully');
 });
 </script>
 
