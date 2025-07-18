@@ -22,6 +22,7 @@ class User extends Authenticatable
         'gender',
         'description',
         'interests',
+        'social_links', // ✅ TAMBAHAN: Social media links
         'role',
         'profile_picture',
         'verification_doc_path',
@@ -40,9 +41,118 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'interests' => 'array',
+            'social_links' => 'array', // ✅ TAMBAHAN: Cast social links ke array
             'is_verified' => 'boolean',
             'match_categories' => 'array',
         ];
+    }
+
+    // ===============================================
+    // ✅ TAMBAHAN: HELPER METHODS UNTUK SOCIAL LINKS
+    // ===============================================
+
+    /**
+     * Get LinkedIn URL
+     */
+    public function getLinkedInUrl()
+    {
+        return $this->social_links['linkedin'] ?? null;
+    }
+
+    /**
+     * Get GitHub URL
+     */
+    public function getGitHubUrl()
+    {
+        return $this->social_links['github'] ?? null;
+    }
+
+    /**
+     * Get Instagram URL
+     */
+    public function getInstagramUrl()
+    {
+        return $this->social_links['instagram'] ?? null;
+    }
+
+    /**
+     * Check if user has any social links
+     */
+    public function hasSocialLinks()
+    {
+        return !empty($this->social_links) && 
+               (isset($this->social_links['linkedin']) || 
+                isset($this->social_links['github']) || 
+                isset($this->social_links['instagram']));
+    }
+
+    /**
+     * Get all social links with proper formatting
+     */
+    public function getFormattedSocialLinks()
+    {
+        $links = [];
+        
+        if (!empty($this->social_links)) {
+            if (isset($this->social_links['linkedin'])) {
+                $links['linkedin'] = [
+                    'url' => $this->social_links['linkedin'],
+                    'display' => 'LinkedIn',
+                    'icon' => 'fab fa-linkedin-in',
+                    'color' => 'bg-blue-600 hover:bg-blue-700'
+                ];
+            }
+            
+            if (isset($this->social_links['github'])) {
+                $links['github'] = [
+                    'url' => $this->social_links['github'],
+                    'display' => 'GitHub',
+                    'icon' => 'fab fa-github',
+                    'color' => 'bg-gray-800 hover:bg-gray-900'
+                ];
+            }
+            
+            if (isset($this->social_links['instagram'])) {
+                $links['instagram'] = [
+                    'url' => $this->social_links['instagram'],
+                    'display' => 'Instagram',
+                    'icon' => 'fab fa-instagram',
+                    'color' => 'bg-pink-600 hover:bg-pink-700'
+                ];
+            }
+        }
+        
+        return $links;
+    }
+
+    /**
+     * Set specific social media link
+     */
+    public function setSocialLink($platform, $url)
+    {
+        $socialLinks = $this->social_links ?? [];
+        $socialLinks[$platform] = $url;
+        $this->social_links = $socialLinks;
+        return $this;
+    }
+
+    /**
+     * Remove specific social media link
+     */
+    public function removeSocialLink($platform)
+    {
+        $socialLinks = $this->social_links ?? [];
+        unset($socialLinks[$platform]);
+        $this->social_links = $socialLinks;
+        return $this;
+    }
+
+    /**
+     * Get social links count
+     */
+    public function getSocialLinksCount()
+    {
+        return count($this->getFormattedSocialLinks());
     }
 
     // ===============================================
@@ -471,7 +581,7 @@ class User extends Authenticatable
     }
 
     /**
-     * ✅ NEW: Check if user profile is complete
+     * ✅ UPDATED: Check if user profile is complete (including social links)
      */
     public function hasCompleteProfile()
     {
@@ -487,7 +597,7 @@ class User extends Authenticatable
     }
 
     /**
-     * ✅ NEW: Get missing profile fields
+     * ✅ UPDATED: Get missing profile fields (termasuk social links untuk completion)
      */
     public function getMissingProfileFields()
     {
@@ -507,6 +617,25 @@ class User extends Authenticatable
         }
         
         return $missing;
+    }
+
+    /**
+     * ✅ NEW: Get profile completion percentage (including social links)
+     */
+    public function getProfileCompletionPercentage()
+    {
+        $completion = 0;
+        
+        if ($this->full_name) $completion += 15;
+        if ($this->email) $completion += 15;
+        if ($this->description) $completion += 15;
+        if ($this->interests && count($this->interests) > 0) $completion += 15;
+        if ($this->prodi && $this->fakultas) $completion += 15;
+        if ($this->gender) $completion += 10;
+        if ($this->profile_picture) $completion += 10;
+        if ($this->hasSocialLinks()) $completion += 5;
+        
+        return min($completion, 100);
     }
 
     // ===============================================
@@ -593,6 +722,16 @@ class User extends Authenticatable
                     ->whereNotNull('prodi')
                     ->whereNotNull('fakultas')
                     ->whereNotNull('gender');
+    }
+
+    /**
+     * ✅ NEW: Scope for users with social links
+     */
+    public function scopeWithSocialLinks($query)
+    {
+        return $query->whereNotNull('social_links')
+                    ->where('social_links', '!=', '[]')
+                    ->where('social_links', '!=', '{}');
     }
 
     // ===============================================
@@ -979,6 +1118,19 @@ class User extends Authenticatable
         echo "Interests Type: " . gettype($this->interests) . "\n";
         echo "Interests Is Array: " . (is_array($this->interests) ? 'YES' : 'NO') . "\n";
         
+        // ✅ TAMBAHAN DEBUG UNTUK SOCIAL LINKS
+        echo "\n--- SOCIAL LINKS CHECK ---\n";
+        $rawSocialLinks = \DB::table('users')->where('id', $this->id)->value('social_links');
+        echo "Social Links Raw: " . ($rawSocialLinks ?? 'NULL') . "\n";
+        echo "Social Links Model: " . json_encode($this->social_links) . "\n";
+        echo "Social Links Type: " . gettype($this->social_links) . "\n";
+        echo "Social Links Is Array: " . (is_array($this->social_links) ? 'YES' : 'NO') . "\n";
+        echo "Has Social Links: " . ($this->hasSocialLinks() ? 'YES' : 'NO') . "\n";
+        echo "Social Links Count: " . $this->getSocialLinksCount() . "\n";
+        echo "LinkedIn URL: " . ($this->getLinkedInUrl() ?? 'NULL') . "\n";
+        echo "GitHub URL: " . ($this->getGitHubUrl() ?? 'NULL') . "\n";
+        echo "Instagram URL: " . ($this->getInstagramUrl() ?? 'NULL') . "\n";
+        
         echo "\n--- JSON TESTS ---\n";
         
         if ($raw) {
@@ -1010,6 +1162,13 @@ class User extends Authenticatable
         echo "Can Manage Payments: " . ($this->canManagePayments() ? 'YES' : 'NO') . "\n";
         echo "Can Approve Alumni: " . ($this->canApproveAlumni() ? 'YES' : 'NO') . "\n";
         echo "Can Access Admin Dashboard: " . ($this->canAccessAdminDashboard() ? 'YES' : 'NO') . "\n";
+        
+        // ✅ TAMBAHAN DEBUG UNTUK PROFILE COMPLETION
+        echo "\n--- PROFILE COMPLETION CHECK ---\n";
+        echo "Profile Completion: " . $this->getProfileCompletionPercentage() . "%\n";
+        echo "Has Complete Profile: " . ($this->hasCompleteProfile() ? 'YES' : 'NO') . "\n";
+        echo "Missing Fields: " . implode(', ', $this->getMissingProfileFields()) . "\n";
+        
         echo "============================================\n\n";
         
         return $this;
@@ -1027,7 +1186,10 @@ class User extends Authenticatable
         echo "Total Users: {$totalUsers}\n";
         
         $usersWithCategories = static::whereNotNull('match_categories')->count();
-        echo "Users with match_categories: {$usersWithCategories}\n\n";
+        echo "Users with match_categories: {$usersWithCategories}\n";
+        
+        $usersWithSocialLinks = static::withSocialLinks()->count();
+        echo "Users with social_links: {$usersWithSocialLinks}\n\n";
         
         $users = static::whereNotNull('match_categories')->take(5)->get();
         
@@ -1044,7 +1206,9 @@ class User extends Authenticatable
             echo "  Is Array: " . (is_array($user->match_categories) ? 'YES' : 'NO') . "\n";
             echo "  Count: " . (is_array($user->match_categories) ? count($user->match_categories) : 0) . "\n";
             echo "  Role Display: " . $user->role_display . "\n";
-            echo "  Can Create Submissions: " . ($user->canCreateSubmissions() ? 'YES' : 'NO') . "\n\n";
+            echo "  Can Create Submissions: " . ($user->canCreateSubmissions() ? 'YES' : 'NO') . "\n";
+            echo "  Has Social Links: " . ($user->hasSocialLinks() ? 'YES' : 'NO') . "\n";
+            echo "  Profile Completion: " . $user->getProfileCompletionPercentage() . "%\n\n";
         }
         
         echo "=====================================\n\n";
@@ -1080,6 +1244,42 @@ class User extends Authenticatable
         return $this;
     }
 
+    /**
+     * ✅ NEW: Test social links functionality
+     */
+    public function testSocialLinks()
+    {
+        echo "========== TEST SOCIAL LINKS ==========\n";
+        echo "User: {$this->full_name} (ID: {$this->id})\n";
+        
+        // Test setting social links
+        $testLinks = [
+            'linkedin' => 'https://linkedin.com/in/testuser',
+            'github' => 'https://github.com/testuser',
+            'instagram' => 'https://instagram.com/testuser'
+        ];
+        
+        echo "Setting test social links...\n";
+        $this->social_links = $testLinks;
+        $result = $this->save();
+        
+        echo "Save Result: " . ($result ? 'SUCCESS' : 'FAILED') . "\n";
+        
+        if ($result) {
+            $fresh = $this->fresh();
+            echo "LinkedIn URL: " . ($fresh->getLinkedInUrl() ?? 'NULL') . "\n";
+            echo "GitHub URL: " . ($fresh->getGitHubUrl() ?? 'NULL') . "\n";
+            echo "Instagram URL: " . ($fresh->getInstagramUrl() ?? 'NULL') . "\n";
+            echo "Has Social Links: " . ($fresh->hasSocialLinks() ? 'YES' : 'NO') . "\n";
+            echo "Social Links Count: " . $fresh->getSocialLinksCount() . "\n";
+            echo "Formatted Links: " . json_encode($fresh->getFormattedSocialLinks()) . "\n";
+        }
+        
+        echo "=====================================\n\n";
+        
+        return $this;
+    }
+
     public static function createTestUser()
     {
         echo "========== CREATING TEST USER ==========\n";
@@ -1092,6 +1292,10 @@ class User extends Authenticatable
                 echo "Updating existing user...\n";
                 
                 $existingUser->match_categories = ['friends', 'jobs', 'pkm'];
+                $existingUser->social_links = [
+                    'linkedin' => 'https://linkedin.com/in/testuser',
+                    'github' => 'https://github.com/testuser'
+                ];
                 $result = $existingUser->save();
                 
                 echo "Update Result: " . ($result ? 'SUCCESS' : 'FAILED') . "\n";
@@ -1110,15 +1314,22 @@ class User extends Authenticatable
                 'prodi' => 'Teknik Informatika',
                 'fakultas' => 'Teknik',
                 'gender' => 'Laki-laki',
-                'description' => 'Test user untuk debugging match categories',
+                'description' => 'Test user untuk debugging match categories dan social links',
                 'interests' => ['programming', 'debugging'],
-                'match_categories' => ['friends', 'jobs', 'test']
+                'match_categories' => ['friends', 'jobs', 'test'],
+                'social_links' => [
+                    'linkedin' => 'https://linkedin.com/in/testuser',
+                    'github' => 'https://github.com/testuser',
+                    'instagram' => 'https://instagram.com/testuser'
+                ]
             ]);
             
             echo "Test user created successfully!\n";
             echo "ID: {$user->id}\n";
             echo "Name: {$user->full_name}\n";
             echo "Categories: " . json_encode($user->match_categories) . "\n";
+            echo "Social Links: " . json_encode($user->social_links) . "\n";
+            echo "Profile Completion: " . $user->getProfileCompletionPercentage() . "%\n";
             echo "==========================================\n\n";
             
             return $user;

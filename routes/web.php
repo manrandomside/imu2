@@ -54,6 +54,47 @@ Route::middleware('auth')->group(function () {
 });
 
 // ===================================================================
+// ✅ ENHANCED PROFILE ROUTES - WITH SOCIAL MEDIA SUPPORT
+// ===================================================================
+
+Route::middleware(['auth'])->group(function () {
+    
+    // Profile Display & Edit Routes
+    Route::get('/profile', [AuthController::class, 'showUserProfilePage'])->name('user.profile');
+    Route::get('/profile/edit', function() {
+        return view('profile_setup')->with('editMode', true);
+    })->name('profile.edit');
+    
+    // Profile Update Routes
+    Route::put('/profile/update', [ProfileController::class, 'updateProfile'])->name('profile.update');
+    
+    // Match Categories
+    Route::get('/match/setup', [AuthController::class, 'showMatchSetupForm'])->name('match.setup');
+    
+    // ✅ NEW: SOCIAL MEDIA & PROFILE MANAGEMENT ROUTES
+    Route::prefix('profile')->name('profile.')->group(function () {
+        // Social Media Management
+        Route::post('/validate-social-url', [ProfileController::class, 'validateSocialUrl'])->name('validate_social_url');
+        Route::delete('/social-links/{platform}', [ProfileController::class, 'removeSocialLink'])->name('remove_social_link');
+        Route::post('/social-links', [ProfileController::class, 'updateSocialLinks'])->name('update_social_links');
+        
+        // Profile Picture Management
+        Route::post('/upload-picture', [ProfileController::class, 'uploadProfilePicture'])->name('upload_picture');
+        
+        // Profile Data API
+        Route::get('/completion', [ProfileController::class, 'getProfileCompletion'])->name('completion');
+        Route::get('/social-links', [ProfileController::class, 'getSocialLinks'])->name('social_links');
+        Route::get('/stats', [ProfileController::class, 'getProfileStats'])->name('stats');
+        
+        // Bulk Update
+        Route::post('/bulk-update', [ProfileController::class, 'bulkUpdateProfile'])->name('bulk_update');
+    });
+    
+    // User Interactions (existing)
+    Route::post('/user/interact', [ProfileController::class, 'storeInteraction'])->name('user.interact');
+});
+
+// ===================================================================
 // MAIN APPLICATION ROUTES (Auth Required)
 // ===================================================================
 
@@ -61,12 +102,7 @@ Route::middleware(['auth'])->group(function () {
     
     // Core Application Pages
     Route::get('/home', [AuthController::class, 'showHomePage'])->name('home');
-    Route::get('/match/setup', [AuthController::class, 'showMatchSetupForm'])->name('match.setup');
     Route::get('/find-people', [AuthController::class, 'showFindingPeoplePage'])->name('find.people');
-    Route::get('/profile', [AuthController::class, 'showUserProfilePage'])->name('user.profile');
-    
-    // User Interactions
-    Route::post('/user/interact', [ProfileController::class, 'storeInteraction'])->name('user.interact');
     
     // Personal Chat Routes
     Route::get('/chat/personal', [ChatController::class, 'showPersonalChatPage'])->name('chat.personal');
@@ -407,6 +443,14 @@ Route::prefix('api')->middleware(['auth'])->group(function () {
             return response()->json(['stats' => []]);
         }
     })->name('api.user.stats');
+    
+    // ✅ NEW: Profile & Social Media API Routes
+    Route::prefix('profile')->name('api.profile.')->group(function () {
+        Route::get('/completion', [ProfileController::class, 'getProfileCompletion'])->name('completion');
+        Route::get('/social-links', [ProfileController::class, 'getSocialLinks'])->name('social_links');
+        Route::get('/stats', [ProfileController::class, 'getProfileStats'])->name('stats');
+        Route::post('/validate-social-url', [ProfileController::class, 'validateSocialUrl'])->name('validate_social_url');
+    });
 });
 
 // ===================================================================
@@ -517,6 +561,45 @@ if (app()->environment('local')) {
             }
         })->name('debug.admin_permissions');
         
+        // ✅ NEW: Debug profile routes
+        Route::get('/debug/profile-routes', function() {
+            try {
+                $user = auth()->user();
+                return response()->json([
+                    'status' => 'success',
+                    'message' => 'Profile routes available',
+                    'user_info' => [
+                        'id' => $user->id,
+                        'name' => $user->full_name,
+                        'has_social_links' => $user->hasSocialLinks(),
+                        'profile_completion' => $user->getProfileCompletionPercentage(),
+                        'social_links_count' => $user->getSocialLinksCount(),
+                    ],
+                    'available_profile_routes' => [
+                        'profile_view' => route('user.profile'),
+                        'profile_edit' => route('profile.edit'),
+                        'profile_update' => route('profile.update'),
+                        'validate_social_url' => route('profile.validate_social_url'),
+                        'profile_completion' => route('profile.completion'),
+                        'profile_stats' => route('profile.stats'),
+                        'upload_picture' => route('profile.upload_picture'),
+                        'update_social_links' => route('profile.update_social_links'),
+                    ],
+                    'api_endpoints' => [
+                        'profile_completion' => route('api.profile.completion'),
+                        'profile_social_links' => route('api.profile.social_links'),
+                        'profile_stats' => route('api.profile.stats'),
+                        'validate_social_url' => route('api.profile.validate_social_url'),
+                    ]
+                ], 200, [], JSON_PRETTY_PRINT);
+            } catch (\Exception $e) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Error testing profile routes: ' . $e->getMessage()
+                ]);
+            }
+        })->name('debug.profile_routes');
+        
         // Test Routes
         Route::get('/debug/test-routes', function() {
             $routes = [
@@ -535,8 +618,16 @@ if (app()->environment('local')) {
                 'Community' => [
                     'GET /community' => route('community'),
                 ],
+                'Profile Management' => [
+                    'GET /profile' => route('user.profile'),
+                    'GET /profile/edit' => route('profile.edit'),
+                    'PUT /profile/update' => route('profile.update'),
+                    'POST /profile/validate-social-url' => route('profile.validate_social_url'),
+                ],
                 'API Routes' => [
                     'GET /api/user/role-info' => route('api.user.role_info'),
+                    'GET /api/profile/completion' => route('api.profile.completion'),
+                    'GET /api/profile/stats' => route('api.profile.stats'),
                 ],
                 'Enhanced Admin Submission Routes' => [
                     'GET /admin/submissions/{id}/edit' => 'admin.submissions.edit',
