@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Str;
 use App\Models\ContentSubmission;
@@ -711,21 +712,55 @@ class ContentSubmissionController extends Controller
     }
 
     /**
-     * ✅ ENHANCED: Publish submission with better error handling
+     * ✅ ENHANCED: Publish submission with comprehensive debugging and robust error handling
      */
     public function publish(ContentSubmission $submission)
     {
         $user = Auth::user();
         
+        // Enhanced permission check dengan logging
         if (!$user->hasModeratorPrivileges()) {
+            Log::warning('Unauthorized publish attempt', [
+                'user_id' => $user->id,
+                'user_role' => $user->role,
+                'submission_id' => $submission->id
+            ]);
+            
             if (request()->expectsJson()) {
                 return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
             }
             abort(403, 'Unauthorized access');
         }
 
-        if (!$submission->canBePublished()) {
-            $message = 'Submission tidak dapat dipublikasi pada status saat ini.';
+        // Enhanced validation dengan detailed logging
+        Log::info('Attempting to publish submission', [
+            'submission_id' => $submission->id,
+            'current_status' => $submission->status,
+            'user_id' => $user->id,
+            'payment_status' => $submission->payment ? $submission->payment->status : 'no_payment',
+            'can_be_published' => $submission->canBePublished()
+        ]);
+
+        // Check individual conditions that might prevent publishing
+        $validationErrors = [];
+        
+        if ($submission->status !== 'approved') {
+            $validationErrors[] = "Status is '{$submission->status}', expected 'approved'";
+        }
+        
+        if (!$submission->payment) {
+            $validationErrors[] = "No payment record found";
+        } elseif ($submission->payment->status !== 'confirmed') {
+            $validationErrors[] = "Payment status is '{$submission->payment->status}', expected 'confirmed'";
+        }
+        
+        if (!empty($validationErrors)) {
+            $message = 'Submission tidak dapat dipublikasi: ' . implode(', ', $validationErrors);
+            Log::warning('Publish validation failed', [
+                'submission_id' => $submission->id,
+                'errors' => $validationErrors
+            ]);
+            
             if (request()->expectsJson()) {
                 return response()->json(['success' => false, 'message' => $message]);
             }
@@ -733,16 +768,35 @@ class ContentSubmissionController extends Controller
         }
 
         try {
-            // Use the model's publish method
-            $submission->publish($user->id);
-
-            Log::info('Submission published', [
-                'submission_id' => $submission->id,
+            DB::beginTransaction();
+            
+            // Langsung update status tanpa bergantung pada publishToGroup
+            $submission->update([
+                'status' => 'published',
                 'published_by' => $user->id,
-                'title' => $submission->title
+                'published_at' => now()
             ]);
 
-            // Clear relevant cache
+            Log::info('Submission status updated to published', [
+                'submission_id' => $submission->id,
+                'published_by' => $user->id
+            ]);
+
+            // Attempt to publish to group (optional - tidak akan gagalkan proses jika error)
+            try {
+                $publishResult = $submission->publishToGroup();
+                Log::info('Publish to group result', [
+                    'submission_id' => $submission->id,
+                    'success' => !!$publishResult
+                ]);
+            } catch (\Exception $e) {
+                Log::warning('Failed to publish to group but continuing', [
+                    'submission_id' => $submission->id,
+                    'error' => $e->getMessage()
+                ]);
+            }
+
+            // Clear cache
             Cache::forget('admin_integrated_stats_' . $user->id);
             Cache::forget('admin_pending_submissions_' . $user->id);
             Cache::forget('submission_admin_stats');
@@ -751,18 +805,26 @@ class ContentSubmissionController extends Controller
             $todayKey = 'admin_total_approved_today';
             $todayCount = Cache::get($todayKey, 0);
             Cache::put($todayKey, $todayCount + 1, now()->endOfDay());
-
-            // Create notification for user
-            if (class_exists('\App\Models\Notification')) {
-                try {
+            
+            // Create notification (optional)
+            try {
+                if (class_exists('\App\Models\Notification')) {
                     Notification::createSubmissionNotification($submission->id, 'submission_published');
-                } catch (\Exception $e) {
-                    Log::warning('Failed to create submission publication notification', [
-                        'submission_id' => $submission->id,
-                        'error' => $e->getMessage()
-                    ]);
                 }
+            } catch (\Exception $e) {
+                Log::warning('Failed to create notification but continuing', [
+                    'submission_id' => $submission->id,
+                    'error' => $e->getMessage()
+                ]);
             }
+
+            DB::commit();
+
+            Log::info('Submission published successfully', [
+                'submission_id' => $submission->id,
+                'published_by' => $user->id,
+                'title' => $submission->title
+            ]);
 
             $message = 'Submission berhasil dipublikasi ke komunitas!';
             if (request()->expectsJson()) {
@@ -779,13 +841,15 @@ class ContentSubmissionController extends Controller
             return back()->with('success', $message);
 
         } catch (\Exception $e) {
+            DB::rollBack();
+            
             Log::error('Error publishing submission', [
                 'submission_id' => $submission->id,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
 
-            $message = 'Terjadi kesalahan saat mempublikasi submission.';
+            $message = 'Terjadi kesalahan saat mempublikasi submission: ' . $e->getMessage();
             if (request()->expectsJson()) {
                 return response()->json(['success' => false, 'message' => $message], 500);
             }

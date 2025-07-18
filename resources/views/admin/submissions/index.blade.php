@@ -157,7 +157,9 @@
         @if(isset($submissions) && $submissions->count() > 0)
             <div class="space-y-4">
                 @foreach($submissions as $submission)
-                    <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow submission-card" data-id="{{ $submission->id }}">
+                    <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow submission-card" 
+                         data-id="{{ $submission->id }}" 
+                         data-submission-id="{{ $submission->id }}">
                         <div class="flex items-start justify-between">
                             {{-- Checkbox for bulk selection --}}
                             <div class="flex items-start space-x-3 flex-1">
@@ -345,6 +347,24 @@
                                         Re-approve
                                     </button>
                                 @endif
+
+                                {{-- ✅ DEBUG BUTTON (only for development) --}}
+                                @if(app()->environment('local'))
+                                    <button onclick="debugSubmission({{ $submission->id }})" 
+                                            class="px-2 py-1 bg-gray-300 hover:bg-gray-400 text-gray-700 rounded text-xs transition-colors">
+                                        <i class="fas fa-bug mr-1"></i>
+                                        Debug
+                                    </button>
+                                @endif
+
+                                {{-- ✅ TEST BUTTON untuk testing publish --}}
+                                @if(app()->environment('local') && $submission->status === 'approved')
+                                    <button onclick="testPublish({{ $submission->id }}, '{{ addslashes($submission->title) }}')" 
+                                            class="px-2 py-1 bg-orange-500 hover:bg-orange-600 text-white rounded text-xs transition-colors">
+                                        <i class="fas fa-flask mr-1"></i>
+                                        Test
+                                    </button>
+                                @endif
                             </div>
                         </div>
                     </div>
@@ -475,7 +495,7 @@
 
 @push('scripts')
 <script>
-// ✅ COMPLETE FIXED JAVASCRIPT FOR ADMIN SUBMISSIONS
+// ✅ FIXED JAVASCRIPT FOR ADMIN SUBMISSIONS WITH COMPREHENSIVE DEBUGGING
 
 // Enhanced Modal functions
 function openApprovalModal(submissionId, title) {
@@ -498,11 +518,17 @@ function closeRejectionModal() {
     document.getElementById('rejection-modal').classList.add('hidden');
 }
 
-// ✅ FIXED: Main action functions with proper error handling
+// ✅ ENHANCED: approveSubmission with better debugging
 function approveSubmission(id, title) {
+    console.log('🟡 [INDIVIDUAL] Attempting to approve submission:', { id, title });
+    
     if (confirm(`Setujui submission "${title}"?`)) {
         showLoading();
-        fetch(`/admin/submissions/${id}/approve`, {
+        
+        const approveUrl = `/admin/submissions/${id}/approve`;
+        console.log('🔗 [INDIVIDUAL] Approve URL:', approveUrl);
+        
+        fetch(approveUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -511,13 +537,20 @@ function approveSubmission(id, title) {
             }
         })
         .then(response => {
+            console.log('📥 [INDIVIDUAL] Approve response status:', response.status);
+            
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                return response.text().then(text => {
+                    console.error('❌ [INDIVIDUAL] Approve response text:', text);
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                });
             }
             return response.json();
         })
         .then(data => {
             hideLoading();
+            console.log('✅ [INDIVIDUAL] Approve response data:', data);
+            
             if (data.success) {
                 showToast('Submission berhasil disetujui!', 'success');
                 setTimeout(() => location.reload(), 1500);
@@ -527,52 +560,265 @@ function approveSubmission(id, title) {
         })
         .catch(error => {
             hideLoading();
-            console.error('Error approving submission:', error);
+            console.error('❌ [INDIVIDUAL] Error approving submission:', error);
             showToast('Terjadi kesalahan saat menyetujui submission: ' + error.message, 'error');
         });
     }
 }
 
-// ✅ FIXED: Enhanced publishSubmission with better error handling
+// ✅ FIXED INDIVIDUAL PUBLISH FUNCTION WITH COMPREHENSIVE DEBUGGING
 function publishSubmission(id, title) {
-    if (confirm(`Publikasikan submission "${title}" ke komunitas?`)) {
+    console.log('🚀 [INDIVIDUAL] Publishing submission:', { 
+        id: id, 
+        title: title, 
+        type: 'INDIVIDUAL_PUBLISH',
+        timestamp: new Date().toISOString() 
+    });
+    
+    // ✅ CRITICAL: Detect if accidentally called with bulk parameters
+    if (typeof id === 'string' && id === 'publish') {
+        console.error('❌ ERROR: Individual publish called with bulk action parameter!');
+        console.error('❌ This should NOT happen. Check the onclick attribute.');
+        showToast('Error: Individual publish dipanggil dengan parameter bulk action!', 'error');
+        return;
+    }
+    
+    // ✅ VALIDATION: Ensure parameters are correct
+    if (!id || !title) {
+        console.error('❌ ERROR: Missing required parameters', { id, title });
+        showToast('Error: Parameter ID atau title tidak lengkap!', 'error');
+        return;
+    }
+    
+    // ✅ ENHANCED CONFIRMATION with clear individual publish marker
+    const confirmMessage = `🚀 INDIVIDUAL PUBLISH\n\nSubmission ID: ${id}\nTitle: ${title}\n\nPublikasikan ke komunitas?`;
+    
+    if (confirm(confirmMessage)) {
         showLoading();
-        fetch(`/admin/submissions/${id}/publish`, {
+        
+        // ✅ EXPLICIT INDIVIDUAL PUBLISH URL
+        const publishUrl = `/admin/submissions/${id}/publish`;
+        console.log('🔗 [INDIVIDUAL] Publish URL:', publishUrl);
+        console.log('🔑 [INDIVIDUAL] CSRF Token:', document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || 'NOT FOUND');
+        
+        // ✅ Enhanced debugging - check submission card data
+        const submissionCard = document.querySelector(`[data-submission-id="${id}"]`);
+        if (submissionCard) {
+            console.log('📋 [INDIVIDUAL] Submission card found:', submissionCard);
+            const statusBadge = submissionCard.querySelector('.rounded-full');
+            console.log('🏷️ [INDIVIDUAL] Current status badge:', statusBadge?.textContent?.trim());
+        } else {
+            console.warn('⚠️ [INDIVIDUAL] Submission card not found for ID:', id);
+        }
+        
+        // ✅ EXPLICIT HEADERS for individual publish
+        const headers = {
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content'),
+            'Accept': 'application/json',
+            'X-Individual-Publish': 'true' // ✅ MARKER for individual publish
+        };
+        
+        console.log('📤 [INDIVIDUAL] Request headers:', headers);
+        
+        fetch(publishUrl, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content'),
-                'Accept': 'application/json'
-            }
+            headers: headers
         })
         .then(response => {
-            console.log('Publish response status:', response.status);
+            console.log('📥 [INDIVIDUAL] Response status:', response.status);
+            console.log('📥 [INDIVIDUAL] Response ok:', response.ok);
+            console.log('📥 [INDIVIDUAL] Response headers:', [...response.headers.entries()]);
+            
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                return response.text().then(text => {
+                    console.error('❌ [INDIVIDUAL] Response text:', text);
+                    console.error('❌ [INDIVIDUAL] Response details:', {
+                        status: response.status,
+                        statusText: response.statusText,
+                        url: response.url
+                    });
+                    throw new Error(`[INDIVIDUAL] HTTP ${response.status}: ${response.statusText}`);
+                });
             }
             return response.json();
         })
         .then(data => {
             hideLoading();
-            console.log('Publish response data:', data);
+            console.log('✅ [INDIVIDUAL] Response data:', data);
+            
+            // ✅ CHECK: Ensure this is individual response, not bulk
+            if (data.message && data.message.includes('submission berhasil diproses')) {
+                console.error('❌ ERROR: Received bulk action response for individual publish!');
+                console.error('❌ This indicates the wrong endpoint was called.');
+                showToast('Error: Individual publish mendapat response bulk action!', 'error');
+                return;
+            }
+            
             if (data.success) {
-                showToast('Submission berhasil dipublikasikan ke komunitas!', 'success');
-                setTimeout(() => location.reload(), 1500);
+                console.log('✅ [INDIVIDUAL] Publish successful!');
+                showToast('✅ Submission berhasil dipublikasikan ke komunitas! (Individual)', 'success');
+                
+                setTimeout(() => {
+                    console.log('🔄 [INDIVIDUAL] Reloading page...');
+                    location.reload();
+                }, 2000);
             } else {
-                showToast(data.message || 'Gagal mempublikasikan submission', 'error');
+                console.error('❌ [INDIVIDUAL] Publish failed:', data.message);
+                showToast('❌ ' + (data.message || 'Gagal mempublikasikan submission'), 'error');
             }
         })
         .catch(error => {
             hideLoading();
-            console.error('Error publishing submission:', error);
-            showToast('Terjadi kesalahan saat mempublikasikan submission: ' + error.message, 'error');
+            console.error('❌ [INDIVIDUAL] Publish error:', error);
+            console.error('❌ [INDIVIDUAL] Error stack:', error.stack);
+            
+            showToast('❌ Terjadi kesalahan saat mempublikasikan submission: ' + error.message, 'error');
+            
+            // ✅ SPECIFIC ERROR DIAGNOSIS
+            if (error.message.includes('404')) {
+                console.error('🔍 [INDIVIDUAL] DIAGNOSIS: Route not found');
+                console.error('🔍 [INDIVIDUAL] Check: routes/web.php for publish route');
+            } else if (error.message.includes('403')) {
+                console.error('🔍 [INDIVIDUAL] DIAGNOSIS: Permission denied');
+                console.error('🔍 [INDIVIDUAL] Check: User has moderator privileges');
+            } else if (error.message.includes('419')) {
+                console.error('🔍 [INDIVIDUAL] DIAGNOSIS: CSRF token mismatch');
+                console.error('🔍 [INDIVIDUAL] Check: CSRF token is valid');
+            } else if (error.message.includes('500')) {
+                console.error('🔍 [INDIVIDUAL] DIAGNOSIS: Server error');
+                console.error('🔍 [INDIVIDUAL] Check: Laravel logs for details');
+            }
+        });
+    } else {
+        console.log('❌ [INDIVIDUAL] Publish cancelled by user');
+    }
+}
+
+// ✅ NEW: Test publish function for troubleshooting
+function testPublish(id, title) {
+    console.log('🧪 [TEST] Testing publish for submission:', { id, title });
+    
+    if (confirm(`🧪 TEST PUBLISH\n\nSubmission ID: ${id}\nTitle: ${title}\n\nTest publikasi (tidak akan benar-benar publish)?`)) {
+        showLoading();
+        
+        // Test dengan endpoint yang sama tapi dengan header khusus
+        fetch(`/admin/submissions/${id}/publish`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content'),
+                'Accept': 'application/json',
+                'X-Test-Mode': 'true'
+            }
+        })
+        .then(response => {
+            console.log('🧪 [TEST] Response status:', response.status);
+            return response.text(); // Get as text first to see raw response
+        })
+        .then(text => {
+            hideLoading();
+            console.log('🧪 [TEST] Raw response:', text);
+            
+            try {
+                const data = JSON.parse(text);
+                console.log('🧪 [TEST] Parsed response:', data);
+                showToast('🧪 Test completed - check console for details', 'info');
+            } catch (e) {
+                console.log('🧪 [TEST] Response is not JSON:', text);
+                showToast('🧪 Test completed - response is not JSON', 'warning');
+            }
+        })
+        .catch(error => {
+            hideLoading();
+            console.error('🧪 [TEST] Error:', error);
+            showToast('🧪 Test error: ' + error.message, 'error');
         });
     }
 }
 
+// ✅ NEW: Debug function to check submission status
+function debugSubmission(id) {
+    console.log('🐛 [DEBUG] Debug submission:', id);
+    
+    // Show basic info about the submission from DOM
+    const submissionCard = document.querySelector(`[data-submission-id="${id}"]`);
+    if (submissionCard) {
+        const statusBadge = submissionCard.querySelector('.rounded-full');
+        const paymentBadge = submissionCard.querySelectorAll('.rounded-full')[1];
+        
+        console.log('🐛 [DEBUG] DOM info:', {
+            submissionId: id,
+            statusBadge: statusBadge?.textContent?.trim(),
+            paymentBadge: paymentBadge?.textContent?.trim(),
+            cardElement: submissionCard
+        });
+    }
+    
+    // Try to fetch debug info if debug route exists
+    fetch(`/debug/submission/${id}`, {
+        method: 'GET',
+        headers: {
+            'Accept': 'application/json',
+            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+        }
+    })
+    .then(response => {
+        if (response.ok) {
+            return response.json();
+        } else {
+            throw new Error('Debug route not available');
+        }
+    })
+    .then(data => {
+        console.log('🐛 [DEBUG] Server debug data:', data);
+        
+        const debugInfo = `
+            <div class="text-left space-y-4">
+                <h3 class="text-lg font-bold">🐛 Debug Info for Submission ${id}</h3>
+                
+                <div>
+                    <strong>📋 Submission:</strong>
+                    <ul class="ml-4 text-sm">
+                        <li>• Status: <code>${data.submission?.status || 'unknown'}</code></li>
+                        <li>• Title: ${data.submission?.title || 'unknown'}</li>
+                        <li>• User: ${data.submission?.user || 'unknown'}</li>
+                    </ul>
+                </div>
+                
+                <div>
+                    <strong>💰 Payment:</strong>
+                    <ul class="ml-4 text-sm">
+                        ${data.payment ? `
+                            <li>• Status: <code>${data.payment.status}</code></li>
+                            <li>• Amount: Rp ${data.payment.amount}</li>
+                        ` : '<li>• No payment found</li>'}
+                    </ul>
+                </div>
+                
+                <div>
+                    <strong>🔧 Actions:</strong>
+                    <ul class="ml-4 text-sm">
+                        <li>• Can be published: ${data.can_actions?.can_be_published ? '✅' : '❌'}</li>
+                    </ul>
+                </div>
+            </div>
+        `;
+        
+        showModalWithContent('Debug Information', debugInfo);
+    })
+    .catch(error => {
+        console.log('🐛 [DEBUG] No server debug available:', error.message);
+        showToast('🐛 Debug: Check console for DOM info', 'info');
+    });
+}
+
 function republishSubmission(id, title) {
+    console.log('🔄 [INDIVIDUAL] Attempting to republish submission:', { id, title });
+    
     if (confirm(`Re-publikasikan submission "${title}" ke komunitas?`)) {
         showLoading();
+        
         fetch(`/admin/submissions/${id}/republish`, {
             method: 'POST',
             headers: {
@@ -582,6 +828,7 @@ function republishSubmission(id, title) {
             }
         })
         .then(response => {
+            console.log('📥 [INDIVIDUAL] Republish response status:', response.status);
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
@@ -589,6 +836,7 @@ function republishSubmission(id, title) {
         })
         .then(data => {
             hideLoading();
+            console.log('✅ [INDIVIDUAL] Republish response data:', data);
             if (data.success) {
                 showToast('Submission berhasil di-republish!', 'success');
                 setTimeout(() => location.reload(), 1500);
@@ -598,18 +846,20 @@ function republishSubmission(id, title) {
         })
         .catch(error => {
             hideLoading();
-            console.error('Error republishing submission:', error);
+            console.error('❌ [INDIVIDUAL] Error republishing submission:', error);
             showToast('Terjadi kesalahan saat republish submission: ' + error.message, 'error');
         });
     }
 }
 
 function editSubmission(id, title) {
-    // Open edit page in new tab or redirect
+    console.log('✏️ [INDIVIDUAL] Opening edit for submission:', { id, title });
     window.open(`/admin/submissions/${id}/edit`, '_blank');
 }
 
 function reapproveSubmission(id, title) {
+    console.log('🔄 [INDIVIDUAL] Attempting to re-approve submission:', { id, title });
+    
     if (confirm(`Re-approve submission "${title}"?`)) {
         showLoading();
         fetch(`/admin/submissions/${id}/approve`, {
@@ -643,21 +893,22 @@ function reapproveSubmission(id, title) {
     }
 }
 
-// ✅ CRITICAL FIX: Add missing processBulkAction function
+// ✅ ENHANCED: Bulk action dengan explicit logging
 function processBulkAction(action) {
+    console.log('📦 [BULK] Processing bulk action:', action);
+    console.log('📦 [BULK] This is BULK ACTION, not individual publish');
+    
     const checkboxes = document.querySelectorAll('.submission-checkbox:checked');
     const submissionIds = Array.from(checkboxes).map(cb => cb.value);
     
+    console.log('📦 [BULK] Selected submissions:', submissionIds);
+    
     if (submissionIds.length === 0) {
-        showToast('Pilih minimal satu submission untuk ' + action, 'warning');
+        showToast('Pilih minimal satu submission untuk bulk ' + action, 'warning');
         return;
     }
 
-    let confirmMessage = `${action.charAt(0).toUpperCase() + action.slice(1)} ${submissionIds.length} submission?`;
-    
-    if (action === 'publish') {
-        confirmMessage = `Publikasikan ${submissionIds.length} submission ke komunitas?`;
-    }
+    let confirmMessage = `📦 BULK ACTION\n\nAction: ${action.toUpperCase()}\nSubmissions: ${submissionIds.length}\n\nLanjutkan?`;
     
     if (confirm(confirmMessage)) {
         showLoading();
@@ -667,36 +918,39 @@ function processBulkAction(action) {
             submission_ids: submissionIds
         };
 
+        console.log('📦 [BULK] Request body:', requestBody);
+
         fetch('/admin/submissions/bulk-action', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content'),
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'X-Bulk-Action': 'true' // ✅ MARKER for bulk action
             },
             body: JSON.stringify(requestBody)
         })
         .then(response => {
-            console.log('Bulk action response status:', response.status);
+            console.log('📦 [BULK] Response status:', response.status);
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                throw new Error(`[BULK] HTTP ${response.status}: ${response.statusText}`);
             }
             return response.json();
         })
         .then(data => {
             hideLoading();
-            console.log('Bulk action response data:', data);
+            console.log('📦 [BULK] Response data:', data);
             if (data.success) {
-                showToast(data.message || `Bulk ${action} berhasil!`, 'success');
+                showToast('📦 ' + (data.message || `Bulk ${action} berhasil!`), 'success');
                 setTimeout(() => location.reload(), 1500);
             } else {
-                showToast(data.message || `Gagal melakukan bulk ${action}`, 'error');
+                showToast('❌ ' + (data.message || `Gagal melakukan bulk ${action}`), 'error');
             }
         })
         .catch(error => {
             hideLoading();
-            console.error('Error in bulk action:', error);
-            showToast(`Terjadi kesalahan saat melakukan bulk ${action}: ` + error.message, 'error');
+            console.error('❌ [BULK] Error:', error);
+            showToast(`❌ Terjadi kesalahan saat melakukan bulk ${action}: ` + error.message, 'error');
         });
     }
 }
@@ -817,13 +1071,14 @@ function executeBulkAction(action) {
 }
 
 function exportSubmissions() {
+    console.log('📊 [INDIVIDUAL] Exporting submissions...');
     showLoading();
     
-    // Get current filter parameters
     const params = new URLSearchParams(window.location.search);
     const exportUrl = '/admin/submissions/export?' + params.toString();
     
-    // Create temporary link and click it
+    console.log('📊 [INDIVIDUAL] Export URL:', exportUrl);
+    
     const link = document.createElement('a');
     link.href = exportUrl;
     link.download = 'submissions_export.csv';
@@ -835,11 +1090,14 @@ function exportSubmissions() {
     showToast('Export dimulai, file akan didownload otomatis', 'success');
 }
 
-// ✅ ENHANCED: Utility functions with better UX
+// ✅ ENHANCED: Utility functions
 function showLoading() {
     const loadingOverlay = document.getElementById('loading-overlay');
     if (loadingOverlay) {
         loadingOverlay.classList.remove('hidden');
+        console.log('⏳ Loading overlay shown');
+    } else {
+        console.warn('⚠️ Loading overlay element not found');
     }
 }
 
@@ -847,11 +1105,13 @@ function hideLoading() {
     const loadingOverlay = document.getElementById('loading-overlay');
     if (loadingOverlay) {
         loadingOverlay.classList.add('hidden');
+        console.log('✅ Loading overlay hidden');
     }
 }
 
-function showToast(message, type = 'info') {
-    // Remove existing toast if any
+function showToast(message, type = 'info', duration = 5000) {
+    console.log(`🍞 Toast: [${type.toUpperCase()}] ${message}`);
+    
     const existingToast = document.getElementById('dynamic-toast');
     if (existingToast) {
         existingToast.remove();
@@ -868,34 +1128,75 @@ function showToast(message, type = 'info') {
                 type === 'error' ? '❌' : 
                 type === 'warning' ? '⚠️' : 'ℹ️';
     
-    toast.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg z-50 text-white ${bgColor} transform transition-all duration-300 translate-x-full`;
+    toast.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg z-50 text-white ${bgColor} transform transition-all duration-300 translate-x-full max-w-md`;
     toast.innerHTML = `
-        <div class="flex items-center space-x-2">
-            <span>${icon}</span>
-            <span>${message}</span>
+        <div class="flex items-start space-x-2">
+            <span class="text-lg">${icon}</span>
+            <div class="flex-1">
+                <div class="text-sm font-medium">${message}</div>
+            </div>
+            <button onclick="this.parentElement.parentElement.remove()" class="text-white hover:text-gray-200 text-lg leading-none">&times;</button>
         </div>
     `;
     
     document.body.appendChild(toast);
     
-    // Animate in
     setTimeout(() => {
         toast.classList.remove('translate-x-full');
     }, 100);
     
-    // Animate out and remove
     setTimeout(() => {
-        toast.classList.add('translate-x-full');
-        setTimeout(() => {
-            if (toast.parentNode) {
-                toast.remove();
-            }
-        }, 300);
-    }, 4000);
+        if (toast.parentElement) {
+            toast.classList.add('translate-x-full');
+            setTimeout(() => {
+                if (toast.parentElement) {
+                    toast.remove();
+                }
+            }, 300);
+        }
+    }, duration);
 }
 
-// ✅ Enhanced modal event listeners
+// ✅ NEW: Show modal with custom content
+function showModalWithContent(title, content) {
+    const existingModal = document.getElementById('custom-modal');
+    if (existingModal) {
+        existingModal.remove();
+    }
+    
+    const modal = document.createElement('div');
+    modal.id = 'custom-modal';
+    modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+    modal.innerHTML = `
+        <div class="bg-white rounded-lg p-6 max-w-2xl w-full mx-4 max-h-96 overflow-y-auto">
+            <div class="flex justify-between items-start mb-4">
+                <h3 class="text-lg font-bold text-gray-800">${title}</h3>
+                <button onclick="this.closest('#custom-modal').remove()" class="text-gray-500 hover:text-gray-700 text-xl">&times;</button>
+            </div>
+            <div class="text-gray-700">
+                ${content}
+            </div>
+            <div class="mt-6 text-right">
+                <button onclick="this.closest('#custom-modal').remove()" class="px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded">Close</button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    modal.addEventListener('click', function(e) {
+        if (e.target === this) {
+            this.remove();
+        }
+    });
+}
+
+// ✅ Enhanced page load event listeners
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('🚀 Admin submissions page loaded');
+    console.log('🔍 Environment:', '{{ app()->environment() }}');
+    console.log('🔑 CSRF Token present:', !!document.querySelector('meta[name="csrf-token"]'));
+    
     // Close modals when clicking outside
     const modals = ['approval-modal', 'rejection-modal', 'bulk-action-modal'];
     modals.forEach(modalId => {
@@ -911,20 +1212,59 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    // Initialize bulk controls
     updateBulkControls();
     
-    // Add keyboard shortcuts
     document.addEventListener('keydown', function(e) {
-        // Escape key closes modals
         if (e.key === 'Escape') {
             closeApprovalModal();
             closeRejectionModal();
             closeBulkActionModal();
+            
+            const customModal = document.getElementById('custom-modal');
+            if (customModal) {
+                customModal.remove();
+            }
         }
     });
     
+    // ✅ DIAGNOSTIC: Check publish button onclick attributes
+    console.log('🔍 [DIAGNOSTIC] Checking publish button onclick attributes...');
+    
+    const publishButtons = document.querySelectorAll('[onclick*="publish"]');
+    console.log('🔍 [DIAGNOSTIC] Found buttons with publish onclick:', publishButtons.length);
+    
+    publishButtons.forEach((btn, index) => {
+        const onclick = btn.getAttribute('onclick');
+        console.log(`🔍 [DIAGNOSTIC] Button ${index + 1}:`, onclick);
+        
+        if (onclick.includes('publishSubmission(')) {
+            console.log('✅ [DIAGNOSTIC] Individual publish button found');
+        } else if (onclick.includes('processBulkAction')) {
+            console.log('📦 [DIAGNOSTIC] Bulk action button found');
+        } else {
+            console.warn('⚠️ [DIAGNOSTIC] Unknown publish button type');
+        }
+    });
+    
+    const submissionCards = document.querySelectorAll('.submission-card');
+    console.log(`📋 Found ${submissionCards.length} submission cards`);
+    
     console.log('✅ Admin submissions JavaScript loaded successfully');
+});
+
+// ✅ ENHANCED: Global error handler for better debugging
+window.addEventListener('error', function(e) {
+    console.error('🚨 Global JavaScript Error:', {
+        message: e.message,
+        filename: e.filename,
+        lineno: e.lineno,
+        colno: e.colno,
+        error: e.error
+    });
+});
+
+window.addEventListener('unhandledrejection', function(e) {
+    console.error('🚨 Unhandled Promise Rejection:', e.reason);
 });
 </script>
 
@@ -976,6 +1316,27 @@ button:hover, .btn:hover {
         flex: 1;
         min-width: calc(50% - 0.25rem);
     }
+}
+
+/* Debug button styles */
+button[onclick^="debugSubmission"] {
+    background: linear-gradient(45deg, #6b7280, #9ca3af);
+    border: 1px solid #d1d5db;
+    font-family: 'Courier New', monospace;
+}
+
+button[onclick^="debugSubmission"]:hover {
+    background: linear-gradient(45deg, #4b5563, #6b7280);
+}
+
+/* Test button styles */
+button[onclick^="testPublish"] {
+    background: linear-gradient(45deg, #f97316, #ea580c);
+    border: 1px solid #fed7aa;
+}
+
+button[onclick^="testPublish"]:hover {
+    background: linear-gradient(45deg, #ea580c, #dc2626);
 }
 </style>
 @endpush
